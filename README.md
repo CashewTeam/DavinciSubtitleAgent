@@ -1,5 +1,7 @@
 # Subtitle Agent for DaVinci Resolve
 
+![Subtitle Agent UI](subtitle_agent/subagent.png)
+
 Subtitle Agent 是一个运行在 DaVinci Resolve `Workspace -> Scripts` 菜单里的 macOS Python 字幕工具。它把音频导出、ASR 识别、文稿强制对齐、SRT 校对、翻译、参考文案优化和导入时间线集中到一个 Resolve UI 界面中。
 
 目前仅面向 macOS。Windows 暂未适配。
