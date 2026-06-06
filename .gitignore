@@ -1,0 +1,23 @@
+.DS_Store
+backup/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local runtime config may contain API keys and machine-specific paths.
+subtitle_agent/subtitle_agent_config.json
+
+# Local/generated working files.
+*.log
+*.tmp
+*.wav
+*.srt
+*.jsonl
+
+# Historical migration backups, not part of the distributable script.
+backup/
+
+# Local packaged ASR environments/models should live outside this script folder.
+asr/
+venv/
+models/
