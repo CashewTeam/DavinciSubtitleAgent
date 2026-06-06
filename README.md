@@ -97,25 +97,19 @@ ffprobe -version
 - FunASR / OpenAI / DashScope 等依赖
 - 模型缓存目录
 
+当前环境包下载链接：
+
+[夸克网盘下载（macos_arm64）](https://pan.quark.cn/s/2caf4f36f2a0)
+
 推荐发布包按用户主目录结构打包，例如压缩包内包含：
 
 ```text
 Documents/asr/
 ```
 
-用户下载后解压到自己的用户主目录：
+下载后解压到自己的用户主目录 ~/：
 
-```text
-~/
-```
-
-解压完成后实际路径应为：
-
-```text
-~/Documents/asr
-```
-
-结构类似：
+完成后结构类似：
 
 ```text
 ~/Documents/asr/
