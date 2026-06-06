@@ -133,6 +133,10 @@ cache_dir   = ~/Documents/asr
 
 `cache_dir` 会被设置为 `MODELSCOPE_CACHE`。FunASR / ModelScope 会在这个缓存目录下自动查找和管理 `models` 子目录。
 
+如果不使用预打包环境，而是希望手动创建 `venv`、安装依赖、下载模型，或者希望让 AI / agent 帮你从零配置环境，请参考：
+
+[AGENT_ENV_SETUP.md](/Library/Application%20Support/Blackmagic%20Design/DaVinci%20Resolve/Fusion/Scripts/Utility/AGENT_ENV_SETUP.md)
+
 ### 4. 配置 API Key
 
 如果使用 FunASR 云端 ASR、LLM 校对、翻译、文案优化，需要配置 DashScope API Key。
