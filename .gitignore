@@ -21,3 +21,4 @@ backup/
 asr/
 venv/
 models/
+.alma-snapshots

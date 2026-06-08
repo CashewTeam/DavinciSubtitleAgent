@@ -12,19 +12,6 @@ import sys
 import tempfile
 import time
 
-
-def _prepend_tool_paths():
-    tool_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-    current = os.environ.get("PATH", "")
-    parts = [part for part in current.split(os.pathsep) if part] if current else []
-    for path in reversed(tool_paths):
-        if path not in parts:
-            parts.insert(0, path)
-    os.environ["PATH"] = os.pathsep.join(parts)
-
-
-_prepend_tool_paths()
-
 RESOLVE_SCRIPT_API = os.environ.get("RESOLVE_SCRIPT_API")
 if RESOLVE_SCRIPT_API:
     sys.path.insert(0, os.path.join(RESOLVE_SCRIPT_API, "Modules"))
@@ -59,17 +46,6 @@ def _resolve_script_dir():
 SCRIPT_DIR = _resolve_script_dir()
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "subtitle_agent_config.json")
 
-LANG_MODELS = {
-    "zh": "fun-asr",
-    "en": "fun-asr",
-    "yue": "fun-asr-mtl-2025-08-25",
-    "ja": "fun-asr-mtl-2025-08-25",
-    "ko": "fun-asr-mtl-2025-08-25",
-    "th": "fun-asr-mtl-2025-08-25",
-    "vi": "fun-asr-mtl-2025-08-25",
-    "id": "fun-asr-mtl-2025-08-25",
-}
-
 REGION_URLS = {
     "cn": "https://dashscope.aliyuncs.com/api/v1",
     "intl": "https://dashscope-intl.aliyuncs.com/api/v1",
@@ -91,8 +67,6 @@ DEFAULT_OPTIMIZE_PROMPT = (
 )
 
 SRT_TIME_RE = re.compile(r"^(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})")
-PUNCT_WHITESPACE = set("，。！？；：\n\r \t\u201c\u201d\u2018\u2019")
-ALIGN_SPLIT_CHARS = set("，。！？；：\n\r")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 ASS_OVERRIDE_RE = re.compile(r"\{\\[^}]*\}")
 
@@ -112,20 +86,6 @@ def write_json(path, data):
 def _worker_log(logs, message):
     logs.append(message)
     print(message, file=sys.stderr, flush=True)
-
-
-def _configure_model_cache(cache_dir=None, logs=None):
-    cache_dir = cache_dir or os.environ.get("MODELSCOPE_CACHE", "")
-    if not str(cache_dir).strip():
-        return ""
-    cache_dir = os.path.abspath(os.path.expanduser(str(cache_dir).strip()))
-    os.makedirs(cache_dir, exist_ok=True)
-    os.environ["MODELSCOPE_CACHE"] = cache_dir
-    os.environ["MODELSCOPE_HUB_CACHE"] = cache_dir
-    os.environ["FUNASR_CACHE"] = cache_dir
-    if logs is not None:
-        _worker_log(logs, "Model cache directory: %s" % cache_dir)
-    return cache_dir
 
 
 def load_agent_config():
@@ -663,7 +623,20 @@ def run_export_audio(job):
     return result
 
 
+def _make_resolve_import_copy(path, suffix=".srt"):
+    source_path = os.path.abspath(path)
+    base_name = os.path.splitext(os.path.basename(source_path))[0]
+    safe_base = _safe_name(base_name)
+    fd, temp_path = tempfile.mkstemp(prefix="subtitle_agent_import_%s_" % safe_base, suffix=suffix)
+    os.close(fd)
+    shutil.copyfile(source_path, temp_path)
+    return temp_path
+
+
 def import_srt(path):
+    source_path = os.path.abspath(path)
+    if not os.path.isfile(source_path):
+        raise RuntimeError("SRT file does not exist: %s" % source_path)
     resolve = _require_resolve()
     project = _require_project(resolve)
     media_pool = project.GetMediaPool()
@@ -676,21 +649,29 @@ def import_srt(path):
 
     _delete_all_subtitle_tracks(timeline)
 
-    imported = media_pool.ImportMedia([os.path.abspath(path)])
-    if not imported:
-        raise RuntimeError("Failed to import SRT file into Media Pool")
-    subtitle_clip = imported[0]
-    timeline.AddTrack("subtitle")
-    result = media_pool.AppendToTimeline([subtitle_clip])
-    if not result:
-        raise RuntimeError("Failed to append subtitles to timeline")
-    items = timeline.GetItemListInTrack("subtitle", 1) or []
-    return {
-        "success": True,
-        "path": os.path.abspath(path),
-        "count": len(items),
-        "items": [{"start": item.GetStart(), "end": item.GetEnd(), "text": item.GetName()} for item in items],
-    }
+    import_copy_path = _make_resolve_import_copy(source_path, suffix=".srt")
+    try:
+        imported = media_pool.ImportMedia([import_copy_path])
+        if not imported:
+            raise RuntimeError("Failed to import SRT file into Media Pool")
+        subtitle_clip = imported[0]
+        timeline.AddTrack("subtitle")
+        result = media_pool.AppendToTimeline([subtitle_clip])
+        if not result:
+            raise RuntimeError("Failed to append subtitles to timeline")
+        items = timeline.GetItemListInTrack("subtitle", 1) or []
+        return {
+            "success": True,
+            "path": source_path,
+            "import_path": import_copy_path,
+            "count": len(items),
+            "items": [{"start": item.GetStart(), "end": item.GetEnd(), "text": item.GetName()} for item in items],
+        }
+    finally:
+        try:
+            os.remove(import_copy_path)
+        except OSError:
+            pass
 
 
 def _temp_json(prefix, payload):
@@ -706,86 +687,6 @@ def _ms_to_srt(ms):
     seconds = int((ms % 60000) // 1000)
     millis = int(ms % 1000)
     return "%02d:%02d:%02d,%03d" % (hours, minutes, seconds, millis)
-
-
-def _get_audio_info(path):
-    cmd = [
-        "ffprobe",
-        "-v",
-        "quiet",
-        "-print_format",
-        "json",
-        "-show_streams",
-        "-select_streams",
-        "a:0",
-        path,
-    ]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("ffprobe failed: %s" % result.stderr.strip())
-    info = json.loads(result.stdout or "{}")
-    stream = info.get("streams", [{}])[0]
-    return {
-        "sample_rate": int(stream.get("sample_rate", 0) or 0),
-        "channels": int(stream.get("channels", 0) or 0),
-        "format": stream.get("codec_name", ""),
-        "duration": float(stream.get("duration", 0) or 0),
-    }
-
-
-def _normalize_audio(path, config, logs):
-    try:
-        info = _get_audio_info(path)
-    except Exception as exc:
-        _worker_log(logs, "Audio probe skipped: %s" % exc)
-        return path, None
-    target_sr = int(config.get("audio_sample_rate", 16000))
-    target_ch = int(config.get("audio_channels", 1))
-    ffmpeg_timeout = int(config.get("ffmpeg_timeout", 300))
-
-    needs_resample = info["sample_rate"] > target_sr
-    needs_mono = info["channels"] > target_ch
-    needs_wav = os.path.splitext(path)[1].lower() not in (".wav",)
-    if not (needs_resample or needs_mono or needs_wav):
-        return path, None
-
-    _worker_log(logs, "Normalizing audio to %sHz/%sch WAV" % (target_sr, target_ch))
-    output_path = os.path.splitext(path)[0] + "_16k.wav"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        path,
-        "-ar",
-        str(target_sr),
-        "-ac",
-        str(target_ch),
-        "-sample_fmt",
-        "s16",
-        "-map_metadata",
-        "-1",
-        output_path,
-    ]
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=ffmpeg_timeout,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("ffmpeg normalization failed: %s" % result.stderr[:300].strip())
-    return output_path, output_path
 
 
 def _init_dashscope(config):
@@ -824,7 +725,7 @@ def _upload_audio(audio_path, logs):
 def _transcribe_remote(file_url, language, config, logs):
     from dashscope.audio.asr import Transcription
 
-    model = (config.get("model") or "").strip() or LANG_MODELS.get(language, "fun-asr")
+    model = (config.get("model") or "").strip() or "fun-asr"
     max_retries = int(config.get("transcription_max_retries", 600))
     poll_interval = int(config.get("transcription_poll_interval", 2))
     _worker_log(logs, "Submitting DashScope transcription (%s / %s)" % (model, language))
@@ -925,268 +826,35 @@ def _result_to_srt(transcription_result, max_words=0):
     return "\n".join(lines), len(lines) // 4
 
 
-def _init_local_model(config, model_name=None, device="cpu", cache_dir=None):
-    try:
-        from funasr import AutoModel
-    except ImportError:
-        raise RuntimeError("funasr is not installed. Run: pip install funasr")
-    if not model_name:
-        model_name = (config.get("local_model_name") or "paraformer-zh").strip()
-    kwargs = {"model": model_name, "device": device or "cpu"}
-    if cache_dir:
-        cache_dir = _configure_model_cache(cache_dir)
-        kwargs["cache_dir"] = cache_dir
-    if "paraformer" in model_name:
-        kwargs["vad_model"] = "fsmn-vad"
-        kwargs["punc_model"] = "ct-punc"
-    return AutoModel(**kwargs)
-
-
-def _transcribe_local(audio_path, model):
-    result = model.generate(input=audio_path)
-    if not result:
-        raise RuntimeError("Local transcription returned no result")
-    return result[0] if isinstance(result, list) else result
-
-
-def _local_result_to_srt(local_result, max_words=0):
-    timestamp_segs = local_result.get("timestamp", [])
-    full_text = local_result.get("text", "").strip()
-    if not timestamp_segs and not full_text:
-        return "\n", 0
-    if not timestamp_segs:
-        return "1\n00:00:00,000 --> 00:00:01,000\n%s\n\n" % full_text, 1
-
-    lines = []
-    last_end_ms = 0
-
-    def clean_segment_text(text):
-        return (text or "").strip().rstrip("，。！？；：、,.")
-
-    def split_segment_text(text):
-        text = (text or "").strip()
-        if not text:
-            return []
-        parts = []
-        start = 0
-        for match in re.finditer(r"[。！？，；：、,.]", text):
-            end = match.end()
-            part = clean_segment_text(text[start:end])
-            if part:
-                parts.append(part)
-            start = end
-        tail = clean_segment_text(text[start:])
-        if tail:
-            parts.append(tail)
-        return parts or [clean_segment_text(text)]
-
-    def flush_segment(start_ms, end_ms, text):
-        nonlocal last_end_ms
-        text = clean_segment_text(text)
-        if not text:
-            return
-        start_ms = max(int(start_ms), last_end_ms)
-        end_ms = max(int(end_ms), start_ms + 1)
-        lines.append(str(len(lines) // 4 + 1))
-        lines.append("%s --> %s" % (_ms_to_srt(start_ms), _ms_to_srt(end_ms)))
-        lines.append(text)
-        lines.append("")
-        last_end_ms = end_ms
-
-    def flush_split_segment(start_ms, end_ms, text):
-        parts = split_segment_text(text)
-        if not parts:
-            return
-        if len(parts) == 1:
-            flush_segment(start_ms, end_ms, parts[0])
-            return
-        start_ms = int(start_ms)
-        end_ms = int(max(end_ms, start_ms + len(parts)))
-        duration = max(len(parts), end_ms - start_ms)
-        total_chars = sum(max(1, len(part)) for part in parts)
-        cursor = start_ms
-        for index, part in enumerate(parts):
-            if index == len(parts) - 1:
-                part_end = end_ms
-            else:
-                part_duration = max(1, int(round(duration * max(1, len(part)) / float(total_chars))))
-                part_end = min(end_ms - (len(parts) - index - 1), cursor + part_duration)
-            if part_end <= cursor:
-                part_end = cursor + 1
-            flush_segment(cursor, part_end, part)
-            cursor = part_end
-
-    has_text = len(timestamp_segs[0]) >= 3 and isinstance(timestamp_segs[0][2], str) and timestamp_segs[0][2].strip()
-    if has_text:
-        for segment in timestamp_segs:
-            flush_split_segment(segment[0], segment[1], str(segment[2] or "").strip())
-    else:
-        sentences = re.findall(r"[^。！？，；：、,.]+[。！？，；：、,.]?", full_text)
-        total_ts = len(timestamp_segs)
-        total_chars = len(full_text)
-        cursor = 0
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence or total_chars == 0:
-                continue
-            sent_len = len(sentence)
-            start_index = int(cursor * total_ts / total_chars)
-            end_index = min(int((cursor + sent_len) * total_ts / total_chars), total_ts - 1)
-            flush_segment(timestamp_segs[start_index][0], timestamp_segs[end_index][1], sentence)
-            cursor += sent_len
-    return "\n".join(lines), len(lines) // 4
-
-
-def _build_char_timeline(ref_text, model_text, model_timestamps):
-    model_tokens = model_text.split()
-    clean_chars = [char for char in ref_text if char not in PUNCT_WHITESPACE]
-    clean_to_tok = {}
-    ref_cursor = 0
-    token_count = min(len(model_tokens), len(model_timestamps))
-    for tok_idx in range(token_count):
-        token = model_tokens[tok_idx]
-        token_len = len(token)
-        matched = False
-        search_end = len(clean_chars) - token_len + 1
-        for start in range(ref_cursor, max(ref_cursor, search_end)):
-            if start >= search_end:
-                break
-            if "".join(clean_chars[start : start + token_len]).lower() == token.lower():
-                for offset in range(token_len):
-                    clean_to_tok[start + offset] = tok_idx
-                ref_cursor = start + token_len
-                matched = True
-                break
-        if not matched and ref_cursor < len(clean_chars):
-            clean_to_tok[ref_cursor] = tok_idx
-            ref_cursor += 1
-
-    timeline = []
-    clean_pos = 0
-    for char in ref_text:
-        if char in PUNCT_WHITESPACE:
-            if timeline:
-                timeline.append((char, timeline[-1][1], timeline[-1][2]))
-            else:
-                timeline.append((char, 0, 0))
-        else:
-            tok_idx = clean_to_tok.get(clean_pos)
-            if tok_idx is not None and tok_idx < len(model_timestamps):
-                start_ms, end_ms = model_timestamps[tok_idx]
-                timeline.append((char, start_ms, end_ms))
-            elif timeline:
-                timeline.append((char, timeline[-1][1], timeline[-1][2]))
-            else:
-                timeline.append((char, 0, 0))
-            clean_pos += 1
-    return timeline
-
-
-def _clean_align_segment_text(text):
-    text = re.sub(r"\s+", " ", text or "").strip()
-    text = re.sub(r"([\u4e00-\u9fff\u3400-\u4dbf\uff00-\uffef])\s+([a-zA-Z0-9])", r"\1\2", text)
-    text = re.sub(r"([a-zA-Z0-9])\s+([\u4e00-\u9fff\u3400-\u4dbf\uff00-\uffef])", r"\1\2", text)
-    return text.rstrip("，。！？；：、")
-
-
-def _join_align_text(parts):
-    text = "".join(part for part in parts if part)
-    return _clean_align_segment_text(text)
-
-
-def _distribute_align_parts(parts, start_ms, end_ms):
-    cleaned = [_clean_align_segment_text(part) for part in parts]
-    cleaned = [part for part in cleaned if part]
-    if not cleaned:
-        return []
-    start_ms = int(max(0, start_ms))
-    end_ms = int(max(end_ms, start_ms + len(cleaned)))
-    total_chars = sum(max(1, len(part)) for part in cleaned)
-    duration = max(len(cleaned), end_ms - start_ms)
-    cursor = start_ms
-    distributed = []
-    for index, text in enumerate(cleaned):
-        if index == len(cleaned) - 1:
-            part_end = end_ms
-        else:
-            part_duration = max(1, int(round(duration * max(1, len(text)) / float(total_chars))))
-            part_end = min(end_ms - (len(cleaned) - index - 1), cursor + part_duration)
-        if part_end <= cursor:
-            part_end = cursor + 1
-        distributed.append((text, cursor, part_end))
-        cursor = part_end
-    return distributed
-
-
-def _merge_untimed_align_segments(segments):
-    merged = []
-    pending = []
-    for text, start_ms, end_ms in segments:
-        if end_ms <= start_ms:
-            pending.append(text)
-            continue
-        if pending:
-            window_start = merged[-1][2] if merged else 0
-            merged.extend(_distribute_align_parts(pending + [text], window_start, end_ms))
-            pending = []
-            continue
-        merged.append((text, start_ms, end_ms))
-    if pending:
-        trailing_text = _join_align_text(pending)
-        if merged and trailing_text:
-            last_text, start_ms, end_ms = merged[-1]
-            merged[-1] = (_join_align_text([last_text, trailing_text]), start_ms, end_ms)
-        elif trailing_text:
-            merged.append((trailing_text, 0, 1000))
-    return _spread_duplicate_time_segments(merged)
-
-
-def _spread_duplicate_time_segments(segments):
-    spread = []
-    index = 0
-    while index < len(segments):
-        text, start_ms, end_ms = segments[index]
-        group = [(text, start_ms, end_ms)]
-        index += 1
-        while index < len(segments) and segments[index][1] == start_ms and segments[index][2] == end_ms:
-            group.append(segments[index])
-            index += 1
-        if len(group) == 1:
-            spread.extend(group)
-        else:
-            spread.extend(_distribute_align_parts([item[0] for item in group], start_ms, end_ms))
-    return spread
-
-
-def _build_srt_segments(ref_text, result, max_chars=0):
-    item = result[0] if isinstance(result, list) and result else result
-    if not isinstance(item, dict):
-        raise RuntimeError("Unsupported alignment result format")
-    model_text = item.get("text", "")
-    model_timestamps = item.get("timestamp", [])
-    if not model_timestamps:
-        return [(ref_text, 0, 0)]
-    char_timeline = _build_char_timeline(ref_text, model_text, model_timestamps)
-    raw_segments = []
-    buffer_chars = []
-    buffer_start = 0
-    for index, (char, start_ms, end_ms) in enumerate(char_timeline):
-        if not buffer_chars:
-            buffer_start = start_ms
-        buffer_chars.append(char)
-        should_split = False
-        if char in ALIGN_SPLIT_CHARS:
-            should_split = True
-        elif max_chars > 0 and len(buffer_chars) >= max_chars:
-            should_split = True
-        elif index == len(char_timeline) - 1:
-            should_split = True
-        if should_split:
-            text = _clean_align_segment_text("".join(buffer_chars))
-            if text:
-                raw_segments.append((text, buffer_start, end_ms))
-            buffer_chars = []
-    return _merge_untimed_align_segments(raw_segments)
+def run_asr(job):
+    config = {
+        "api_key": job.get("dashscope_api_key", ""),
+        "region": job.get("region", "cn"),
+        "model": job.get("model", ""),
+        "transcription_max_retries": job.get("transcription_max_retries", 600),
+        "transcription_poll_interval": job.get("transcription_poll_interval", 2),
+    }
+    logs = []
+    audio_path = os.path.abspath(job["audio"])
+    output_path = os.path.abspath(job["output"])
+    language = job.get("lang", "zh")
+    max_words = int(job.get("max_words", 0))
+    _worker_log(logs, "Running remote ASR")
+    _init_dashscope(config)
+    file_url = _upload_audio(audio_path, logs)
+    result = _transcribe_remote(file_url, language, config, logs)
+    srt_text, count = _result_to_srt(result, max_words=max_words)
+    with open(output_path, "w", encoding="utf-8") as handle:
+        handle.write(srt_text)
+    srt_data = read_srt_file(output_path)
+    return {
+        "success": True,
+        "path": output_path,
+        "count": count,
+        "items": srt_data["items"],
+        "logs": logs,
+        "logs_streamed": True,
+    }
 
 
 def _read_srt_entries(path):
@@ -1275,127 +943,8 @@ def _fix_punctuation(text):
     text = re.sub(r",，", "，", text)
     text = re.sub(r"[.][.]+", "…", text)
     text = re.sub(r"…\.", "…", text)
-    text = re.sub(r"。\.", "。", text)
+    text = re.sub(r"۔\.", "。", text)
     return text.replace('"', "「")
-
-
-def run_asr(job):
-    config = {
-        "api_key": job.get("dashscope_api_key", ""),
-        "region": job.get("region", "cn"),
-        "model": job.get("model", ""),
-        "max_words": job.get("max_words", 0),
-        "audio_sample_rate": job.get("audio_sample_rate", 16000),
-        "audio_channels": job.get("audio_channels", 1),
-        "ffmpeg_timeout": job.get("ffmpeg_timeout", 300),
-        "transcription_max_retries": job.get("transcription_max_retries", 600),
-        "transcription_poll_interval": job.get("transcription_poll_interval", 2),
-        "local_model_name": job.get("model_name", "paraformer-zh"),
-    }
-    logs = []
-    audio_path = os.path.abspath(job["audio"])
-    output_path = os.path.abspath(job["output"])
-    language = job.get("lang", "zh")
-    max_words = int(job.get("max_words", 0))
-    local_mode = bool(job.get("local"))
-    temp_audio = None
-    try:
-        if local_mode:
-            _worker_log(logs, "Running local ASR")
-            cache_dir = _configure_model_cache(job.get("cache_dir"), logs)
-            normalized_audio, temp_audio = _normalize_audio(audio_path, config, logs)
-            _worker_log(logs, "Loading local ASR model")
-            model = _init_local_model(
-                config,
-                model_name=job.get("model_name"),
-                device=job.get("device", "cpu"),
-                cache_dir=cache_dir,
-            )
-            _worker_log(logs, "Transcribing with local ASR")
-            local_result = _transcribe_local(normalized_audio, model)
-            _worker_log(logs, "Converting local ASR result to SRT")
-            srt_text, count = _local_result_to_srt(local_result, max_words=max_words)
-        else:
-            _worker_log(logs, "Running remote ASR")
-            _init_dashscope(config)
-            normalized_audio, temp_audio = _normalize_audio(audio_path, config, logs)
-            file_url = _upload_audio(normalized_audio, logs)
-            result = _transcribe_remote(file_url, language, config, logs)
-            srt_text, count = _result_to_srt(result, max_words=max_words)
-        with open(output_path, "w", encoding="utf-8") as handle:
-            handle.write(srt_text)
-        srt_data = read_srt_file(output_path)
-        return {
-            "success": True,
-            "path": output_path,
-            "count": count,
-            "items": srt_data["items"],
-            "logs": logs,
-            "logs_streamed": True,
-        }
-    finally:
-        if temp_audio and os.path.exists(temp_audio):
-            try:
-                os.remove(temp_audio)
-            except OSError:
-                pass
-
-
-def run_align(job):
-    audio_path = os.path.abspath(job["audio"])
-    text_path = os.path.abspath(job["text"])
-    output_path = os.path.abspath(job["output"])
-    model_name = job.get("model", "fa-zh")
-    device = job.get("device", "cpu")
-    cache_dir = job.get("cache_dir", "")
-    max_chars = int(job.get("max_chars", 0))
-    logs = []
-    cache_dir = _configure_model_cache(cache_dir, logs)
-
-    if not os.path.isfile(audio_path):
-        raise RuntimeError("Audio file does not exist: %s" % audio_path)
-    if not os.path.isfile(text_path):
-        raise RuntimeError("Reference text file does not exist: %s" % text_path)
-
-    with open(text_path, "r", encoding="utf-8") as handle:
-        ref_text = handle.read().strip()
-    if not ref_text:
-        raise RuntimeError("Reference text is empty")
-
-    try:
-        from funasr import AutoModel
-    except ImportError:
-        raise RuntimeError("funasr is not installed. Run: pip install funasr torch")
-
-    _worker_log(logs, "Loading align model: %s" % model_name)
-    model_kwargs = {"model": model_name, "device": device}
-    if cache_dir:
-        model_kwargs["cache_dir"] = cache_dir
-    model = AutoModel(**model_kwargs)
-    _worker_log(logs, "Running forced alignment")
-    result = model.generate(input=(audio_path, text_path), data_type=("sound", "text"))
-    _worker_log(logs, "Building SRT segments")
-    segments = _build_srt_segments(ref_text, result, max_chars=max_chars)
-    if not segments:
-        raise RuntimeError("Alignment returned no subtitle segments")
-
-    lines = []
-    for idx, (text, start_ms, end_ms) in enumerate(segments, 1):
-        if end_ms == 0 and start_ms == 0 and len(segments) == 1:
-            lines.extend([str(idx), "00:00:00,000 --> 00:00:00,000", text, ""])
-        elif end_ms > start_ms:
-            lines.extend([str(idx), "%s --> %s" % (_ms_to_srt(start_ms), _ms_to_srt(end_ms)), text, ""])
-    with open(output_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines))
-    srt_data = read_srt_file(output_path)
-    return {
-        "success": True,
-        "path": output_path,
-        "count": srt_data["count"],
-        "items": srt_data["items"],
-        "logs": logs,
-        "logs_streamed": True,
-    }
 
 
 def run_read_srt(job):
@@ -1459,6 +1008,23 @@ def _stream_event(event_type, **payload):
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
 
+def _safe_name(name):
+    return re.sub(r"[^\w\-]+", "_", name or "").strip("_") or "subtitle_agent"
+
+
+def _format_exception_details(exc, max_depth=3):
+    parts = []
+    current = exc
+    depth = 0
+    while current is not None and depth < max_depth:
+        text = str(current).strip()
+        label = type(current).__name__
+        parts.append("%s: %s" % (label, text) if text else label)
+        current = current.__cause__ or current.__context__
+        depth += 1
+    return " | ".join(parts)
+
+
 def _require_llm_config(job):
     api_key = job.get("api_key") or os.environ.get("DASHSCOPE_API_KEY") or ""
     if not api_key:
@@ -1471,9 +1037,14 @@ def _require_llm_config(job):
         "client": OpenAI(
             api_key=api_key,
             base_url=job.get("base_url") or "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            timeout=float(job.get("timeout_seconds") or 180),
+            max_retries=int(job.get("connection_retries") or 3),
         ),
+        "base_url": job.get("base_url") or "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model": job.get("model") or "deepseek-v4-flash",
         "enable_thinking": bool(job.get("enable_thinking", True)),
+        "timeout_seconds": float(job.get("timeout_seconds") or 180),
+        "connection_retries": max(1, int(job.get("connection_retries") or 3)),
     }
 
 
@@ -1520,31 +1091,75 @@ def _apply_index_text_edits(input_path, output_path, edit_json):
 def _llm_stream_chat(job, messages):
     config = _require_llm_config(job)
     _stream_event("status", message="连接 LLM：%s" % config["model"])
-    stream = config["client"].chat.completions.create(
-        model=config["model"],
-        messages=messages,
-        extra_body={"enable_thinking": config["enable_thinking"]},
-        stream=True,
-        stream_options={"include_usage": True},
+    _stream_event(
+        "status",
+        message="LLM endpoint：%s，timeout=%ss" % (config["base_url"], int(config["timeout_seconds"])),
     )
-    answer_content = ""
-    reasoning_length = 0
-    for chunk in stream:
-        if not getattr(chunk, "choices", None):
-            usage = getattr(chunk, "usage", None)
-            if usage is not None:
-                _stream_event("status", message="Token 消耗：%s" % usage)
-            continue
-        delta = chunk.choices[0].delta
-        reasoning = getattr(delta, "reasoning_content", None)
-        if reasoning:
-            reasoning_length += len(reasoning)
-            _stream_event("reasoning_summary", message="思维链文本长度：%s 字符" % reasoning_length)
-        content = getattr(delta, "content", None)
-        if content:
-            answer_content += content
-            _stream_event("content_delta", text=content)
-    return answer_content
+    try:
+        import httpx
+    except Exception:
+        httpx = None
+    try:
+        from openai import APIConnectionError, APITimeoutError
+        retryable = [APIConnectionError, APITimeoutError]
+    except Exception:
+        retryable = []
+    if httpx is not None:
+        retryable.extend([httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.ConnectTimeout])
+    retryable = tuple(retryable) if retryable else (Exception,)
+    last_detail = ""
+    for attempt in range(1, config["connection_retries"] + 1):
+        try:
+            stream = config["client"].chat.completions.create(
+                model=config["model"],
+                messages=messages,
+                extra_body={"enable_thinking": config["enable_thinking"]},
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+            answer_content = ""
+            reasoning_length = 0
+            for chunk in stream:
+                if not getattr(chunk, "choices", None):
+                    usage = getattr(chunk, "usage", None)
+                    if usage is not None:
+                        _stream_event("status", message="Token 消耗：%s" % usage)
+                    continue
+                delta = chunk.choices[0].delta
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning:
+                    reasoning_length += len(reasoning)
+                    _stream_event("reasoning_summary", message="思维链文本长度：%s 字符" % reasoning_length)
+                content = getattr(delta, "content", None)
+                if content:
+                    answer_content += content
+                    _stream_event("content_delta", text=content)
+            return answer_content
+        except retryable as exc:
+            last_detail = _format_exception_details(exc)
+            if attempt < config["connection_retries"]:
+                wait_seconds = min(5, 2 ** (attempt - 1))
+                _stream_event(
+                    "status",
+                    message="LLM 连接异常，第 %s/%s 次重试前等待 %ss：%s"
+                    % (attempt, config["connection_retries"], wait_seconds, last_detail),
+                )
+                time.sleep(wait_seconds)
+                continue
+            raise RuntimeError(
+                "LLM connection failed after %s attempts. endpoint=%s model=%s detail=%s"
+                % (config["connection_retries"], config["base_url"], config["model"], last_detail)
+            )
+        except Exception as exc:
+            detail = _format_exception_details(exc)
+            raise RuntimeError(
+                "LLM request failed. endpoint=%s model=%s detail=%s"
+                % (config["base_url"], config["model"], detail)
+            )
+    raise RuntimeError(
+        "LLM connection failed. endpoint=%s model=%s detail=%s"
+        % (config["base_url"], config["model"], last_detail or "unknown error")
+    )
 
 
 def run_llm_srt_edit_stream(job):
@@ -1627,8 +1242,6 @@ def run_worker_job(job):
         return run_export_audio(job)
     if action == "asr":
         return run_asr(job)
-    if action == "align":
-        return run_align(job)
     if action == "read_srt":
         return run_read_srt(job)
     if action == "convert_srt":

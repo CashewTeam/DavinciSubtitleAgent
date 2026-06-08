@@ -18,12 +18,10 @@ LEGACY_SCRIPT_IDS = [
     "com.codex.resolve.SubtitleAgent",
     "com.codex.resolve.SubtitleAgent.v2",
 ]
-APP_VERSION = "2026-06-06.35"
+APP_VERSION = "2026-06-08.43"
 
 MODE_LABELS = [
-    ("align", "文稿匹配（强制对齐）"),
-    ("asr_remote", "FunASR 云端 ASR"),
-    ("asr_local", "FunASR 本地 ASR"),
+    ("asr_remote", "远程 ASR"),
     ("resolve_builtin", "Resolve 内置字幕生成"),
 ]
 MODE_LABEL_TO_KEY = dict((label, key) for key, label in MODE_LABELS)
@@ -98,13 +96,22 @@ def compact_user_path(path):
 
 
 def load_core_module():
-    module_name = "subtitle_agent_core_embedded"
+    try:
+        module_stamp = str(int(os.path.getmtime(CORE_PATH)))
+    except Exception:
+        module_stamp = str(int(time.time()))
+    module_name = "subtitle_agent_core_embedded_%s" % module_stamp
     loader = SourceFileLoader(module_name, CORE_PATH)
     spec = importlib.util.spec_from_loader(module_name, loader)
     if spec is None:
         raise RuntimeError("Failed to create import spec for %s" % CORE_PATH)
     module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
+    old_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = old_dont_write_bytecode
     return module
 
 
@@ -115,26 +122,15 @@ def ensure_config():
     os.makedirs(AGENT_DIR, exist_ok=True)
     if os.path.isfile(CONFIG_PATH):
         return
-    base_dir_token = default_user_asr_dir_token()
-    default_python_path = base_dir_token + "/venv/bin/python"
-    default_cache_dir = base_dir_token
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         json.dump(
             {
-                "python_path": default_python_path,
-                "output_dir_mode": "custom",
-                "custom_output_dir": base_dir_token,
                 "dashscope_api_key": "",
                 "region": "cn",
                 "default_lang": "zh",
                 "default_max_words": 0,
                 "default_max_chars": 24,
                 "default_chars_per_line": 24,
-                "local_model_name": "paraformer-zh",
-                "local_device": "cpu",
-                "cache_dir": default_cache_dir,
-                "align_model": "fa-zh",
-                "align_device": "cpu",
                 "llm_model": "deepseek-v4-flash",
                 "llm_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "llm_enable_thinking": True,
@@ -152,15 +148,9 @@ def load_config():
     ensure_config()
     with open(CONFIG_PATH, "r", encoding="utf-8") as handle:
         config = json.load(handle)
-    base_dir = default_user_asr_dir()
-    if not config.get("python_path"):
-        config["python_path"] = os.path.join(base_dir, "bin", "python")
-    if not config.get("cache_dir"):
-        config["cache_dir"] = base_dir
-    if not config.get("custom_output_dir"):
-        config["custom_output_dir"] = base_dir
-    if not config.get("output_dir_mode"):
-        config["output_dir_mode"] = "custom"
+    for key in ("python_path", "custom_output_dir"):
+        if config.get(key):
+            config[key] = expand_user_path(config[key])
     if not config.get("llm_model"):
         config["llm_model"] = "deepseek-v4-flash"
     if not config.get("llm_base_url"):
@@ -175,8 +165,6 @@ def load_config():
         config["llm_optimize_prompt"] = DEFAULT_OPTIMIZE_PROMPT
     config.pop("corrections_path", None)
     config.pop("corrections_json", None)
-    for key in ("python_path", "custom_output_dir", "cache_dir"):
-        config[key] = expand_user_path(config.get(key))
     return config
 
 
@@ -304,15 +292,13 @@ class SubtitleAgentApp(object):
         self.log("Script path: %s" % os.path.join(SCRIPT_DIR, "SubtitleAgent.py"))
         self.log("Core path: %s" % CORE_PATH)
         self.log("Audio export mode: external worker")
-        if not self.config.get("python_path"):
-            self.log("Config missing python_path. Edit %s before using ASR/align features." % CONFIG_PATH)
         return win
 
     def _status_group(self):
         return UI.VGroup(
             {"Weight": 0, "Spacing": 4},
             [
-                UI.Label({"ID": "statusTitleLabel", "Text": "Step 1 · 初始化", "StyleSheet": "font-weight: bold; font-size: 14px;"}),
+                UI.Label({"ID": "statusTitleLabel", "Text": "Step 1 \xb7 \u521d\u59cb\u5316", "StyleSheet": "font-weight: bold; font-size: 14px;"}),
                 UI.HGroup(
                     {"Weight": 0, "Spacing": 6},
                     [
@@ -330,9 +316,9 @@ class SubtitleAgentApp(object):
                     {"Weight": 0, "Spacing": 6},
                     [
                         UI.ComboBox({"ID": "timelineCombo", "Weight": 2}),
-                        UI.Button({"ID": "refreshStatusBtn", "Text": "刷新状态", "Weight": 0}),
-                        UI.Button({"ID": "switchTimelineBtn", "Text": "切换时间线", "Weight": 0}),
-                        UI.Button({"ID": "fixTimecodeBtn", "Text": "修正起始时码", "Weight": 0}),
+                        UI.Button({"ID": "refreshStatusBtn", "Text": "\u5237\u65b0\u72b6\u6001", "Weight": 0}),
+                        UI.Button({"ID": "switchTimelineBtn", "Text": "\u5207\u6362\u65f6\u95f4\u7ebf", "Weight": 0}),
+                        UI.Button({"ID": "fixTimecodeBtn", "Text": "\u4fee\u6b63\u8d77\u59cb\u65f6\u7801", "Weight": 0}),
                     ],
                 ),
             ],
@@ -342,40 +328,40 @@ class SubtitleAgentApp(object):
         return UI.VGroup(
             {"Weight": 2, "Spacing": 4},
             [
-                UI.Label({"Text": "Step 2 · 准备素材", "StyleSheet": "font-weight: bold; font-size: 14px;"}),
+                UI.Label({"Text": "Step 2 \xb7 \u51c6\u5907\u7d20\u6750", "StyleSheet": "font-weight: bold; font-size: 14px;"}),
                 UI.HGroup(
                     {"Weight": 0, "Spacing": 6},
                     [
-                        UI.Label({"Text": "输出目录", "Weight": 0}),
+                        UI.Label({"Text": "\u8f93\u51fa\u76ee\u5f55", "Weight": 0}),
                         UI.LineEdit({"ID": "outputDirEdit", "Weight": 3}),
-                        UI.Button({"ID": "browseOutputDirBtn", "Text": "选择目录", "Weight": 0}),
-                        UI.Label({"Text": "前缀", "Weight": 0}),
+                        UI.Button({"ID": "browseOutputDirBtn", "Text": "\u9009\u62e9\u76ee\u5f55", "Weight": 0}),
+                        UI.Label({"Text": "\u524d\u7f00", "Weight": 0}),
                         UI.LineEdit({"ID": "outputPrefixEdit", "Weight": 1}),
                     ],
                 ),
                 UI.HGroup(
                     {"Weight": 0, "Spacing": 6},
                     [
-                        UI.Label({"Text": "WAV 文件", "Weight": 0}),
+                        UI.Label({"Text": "WAV \u6587\u4ef6", "Weight": 0}),
                         UI.LineEdit({"ID": "wavPathEdit", "Weight": 3}),
-                        UI.Button({"ID": "browseWavBtn", "Text": "选择 WAV", "Weight": 0}),
-                        UI.Button({"ID": "clearWavBtn", "Text": "清空 WAV", "Weight": 0}),
+                        UI.Button({"ID": "browseWavBtn", "Text": "\u9009\u62e9 WAV", "Weight": 0}),
+                        UI.Button({"ID": "clearWavBtn", "Text": "\u6e05\u7a7a WAV", "Weight": 0}),
                     ],
                 ),
                 UI.HGroup(
                     {"Weight": 0, "Spacing": 6},
                     [
-                        UI.Label({"Text": "参考文稿", "Weight": 0}),
+                        UI.Label({"Text": "\u53c2\u8003\u6587\u7a3f", "Weight": 0}),
                         UI.LineEdit({"ID": "textPathEdit", "Weight": 3}),
-                        UI.Button({"ID": "browseTextBtn", "Text": "选择文稿", "Weight": 0}),
-                        UI.Button({"ID": "clearTextBtn", "Text": "清空文稿", "Weight": 0}),
+                        UI.Button({"ID": "browseTextBtn", "Text": "\u9009\u62e9\u6587\u7a3f", "Weight": 0}),
+                        UI.Button({"ID": "clearTextBtn", "Text": "\u6e05\u7a7a\u6587\u7a3f", "Weight": 0}),
                     ],
                 ),
                 UI.HGroup(
                     {"Weight": 0, "Spacing": 6},
                     [
-                        UI.Label({"Text": "参考文案输入 / 编辑", "Weight": 1}),
-                        UI.Button({"ID": "optimizeTextBtn", "Text": "优化文案", "Weight": 0}),
+                        UI.Label({"Text": "\u53c2\u8003\u6587\u6848\u8f93\u5165 / \u7f16\u8f91", "Weight": 1}),
+                        UI.Button({"ID": "optimizeTextBtn", "Text": "\u4f18\u5316\u6587\u6848", "Weight": 0}),
                     ],
                 ),
                 UI.VGroup(
@@ -385,7 +371,7 @@ class SubtitleAgentApp(object):
                             {
                                 "ID": "textEditor",
                                 "Weight": 1,
-                                "PlaceholderText": "有参考文稿时可直接粘贴或编辑。留空则按设置中的识别模式执行 ASR。",
+                                "PlaceholderText": "\u6709\u53c2\u8003\u6587\u7a3f\u65f6\u53ef\u76f4\u63a5\u7c98\u8d34\u6216\u7f16\u8f91\u3002\u7559\u7a7a\u5219\u6309\u8bbe\u7f6e\u4e2d\u7684\u8bc6\u522b\u6a21\u5f0f\u6267\u884c ASR\u3002",
                             }
                         ),
                     ],
@@ -393,18 +379,18 @@ class SubtitleAgentApp(object):
                 UI.HGroup(
                     {"Weight": 0, "Spacing": 6},
                     [
-                        UI.Label({"Text": "SRT 文件", "Weight": 0}),
+                        UI.Label({"Text": "SRT \u6587\u4ef6", "Weight": 0}),
                         UI.LineEdit({"ID": "srtPathEdit", "Weight": 3}),
-                        UI.Button({"ID": "browseSrtBtn", "Text": "选择 SRT", "Weight": 0}),
-                        UI.Button({"ID": "inlineSettingsBtn", "Text": "设置", "Weight": 0}),
+                        UI.Button({"ID": "browseSrtBtn", "Text": "\u9009\u62e9 SRT", "Weight": 0}),
+                        UI.Button({"ID": "inlineSettingsBtn", "Text": "\u8bbe\u7f6e", "Weight": 0}),
                     ],
                 ),
                 UI.HGroup(
                     {"Weight": 0, "Spacing": 6},
                     [
-                        UI.Label({"Text": "原始 SRT", "Weight": 0}),
+                        UI.Label({"Text": "\u539f\u59cb SRT", "Weight": 0}),
                         UI.LineEdit({"ID": "rawSrtEdit", "ReadOnly": True, "Weight": 2}),
-                        UI.Label({"Text": "处理后 SRT", "Weight": 0}),
+                        UI.Label({"Text": "\u5904\u7406\u540e SRT", "Weight": 0}),
                         UI.LineEdit({"ID": "processedSrtEdit", "ReadOnly": True, "Weight": 2}),
                     ],
                 ),
@@ -415,17 +401,17 @@ class SubtitleAgentApp(object):
         return UI.VGroup(
             {"Weight": 0, "Spacing": 4},
             [
-                UI.Label({"Text": "Step 3 · 执行", "StyleSheet": "font-weight: bold; font-size: 14px;"}),
+                UI.Label({"Text": "Step 3 \xb7 \u6267\u884c", "StyleSheet": "font-weight: bold; font-size: 14px;"}),
                 UI.HGroup(
                     {"Weight": 0, "Spacing": 6},
                     [
-                        UI.Label({"Text": "当前模式", "Weight": 0}),
+                        UI.Label({"Text": "\u5f53\u524d\u6a21\u5f0f", "Weight": 0}),
                         UI.ComboBox({"ID": "modeCombo", "Weight": 1}),
-                        UI.Button({"ID": "generateBtn", "Text": "开始识别", "Weight": 0}),
-                        UI.Button({"ID": "exportSrtBtn", "Text": "导出时间线字幕", "Weight": 0}),
-                        UI.Button({"ID": "convertSrtBtn", "Text": "校对", "Weight": 0}),
-                        UI.Button({"ID": "applyCorrectionsBtn", "Text": "翻译", "Weight": 0}),
-                        UI.Button({"ID": "importSrtBtn", "Text": "导入 SRT 到时间线", "Weight": 0}),
+                        UI.Button({"ID": "generateBtn", "Text": "\u5f00\u59cb\u8bc6\u522b", "Weight": 0}),
+                        UI.Button({"ID": "exportSrtBtn", "Text": "\u5bfc\u51fa\u65f6\u95f4\u7ebf\u5b57\u5e55", "Weight": 0}),
+                        UI.Button({"ID": "convertSrtBtn", "Text": "\u6821\u5bf9", "Weight": 0}),
+                        UI.Button({"ID": "applyCorrectionsBtn", "Text": "\u7ffb\u8bd1", "Weight": 0}),
+                        UI.Button({"ID": "importSrtBtn", "Text": "\u5bfc\u5165 SRT \u5230\u65f6\u95f4\u7ebf", "Weight": 0}),
                     ],
                 ),
             ],
@@ -438,14 +424,14 @@ class SubtitleAgentApp(object):
                 UI.VGroup(
                     {"Weight": 1, "Spacing": 1},
                     [
-                        UI.Label({"Text": "日志", "Weight": 0, "MaximumSize": [16777215, 16], "StyleSheet": "font-size: 11px;"}),
+                        UI.Label({"Text": "\u65e5\u5fd7", "Weight": 0, "MaximumSize": [16777215, 16], "StyleSheet": "font-size: 11px;"}),
                         UI.TextEdit({"ID": "logEdit", "ReadOnly": True, "Weight": 3, "MinimumSize": [0, 320]}),
                     ],
                 ),
                 UI.VGroup(
                     {"Weight": 1, "Spacing": 1},
                     [
-                        UI.Label({"Text": "字幕预览", "Weight": 0, "MaximumSize": [16777215, 16], "StyleSheet": "font-size: 11px;"}),
+                        UI.Label({"Text": "\u5b57\u5e55\u9884\u89c8", "Weight": 0, "MaximumSize": [16777215, 16], "StyleSheet": "font-size: 11px;"}),
                         UI.TextEdit({"ID": "previewEdit", "ReadOnly": True, "Weight": 3, "MinimumSize": [0, 320]}),
                     ],
                 ),
@@ -456,7 +442,7 @@ class SubtitleAgentApp(object):
         items = self.items
         items["outputDirEdit"].Text = self._default_output_dir()
         items["modeCombo"].AddItems([label for _, label in MODE_LABELS])
-        self._select_mode_combo(self.config.get("recognition_mode", "align"))
+        self._select_mode_combo(self.config.get("recognition_mode", "asr_remote"))
 
     def _connect_handlers(self):
         win = self.window
@@ -507,19 +493,17 @@ class SubtitleAgentApp(object):
             return MODE_LABEL_TO_KEY[current]
         if current in MODE_KEY_TO_LABEL:
             return current
-        return self.config.get("recognition_mode", "align")
+        return self.config.get("recognition_mode", "asr_remote")
 
     def _mode_summary(self):
         mode_map = {
-            "align": "当前模式：文稿匹配（强制对齐）",
-            "asr_remote": "当前模式：FunASR 云端 ASR",
-            "asr_local": "当前模式：FunASR 本地 ASR",
-            "resolve_builtin": "当前模式：Resolve 内置字幕生成",
+            "asr_remote": "\u5f53\u524d\u6a21\u5f0f\uff1a\u8fdc\u7a0b ASR",
+            "resolve_builtin": "\u5f53\u524d\u6a21\u5f0f\uff1aResolve \u5185\u7f6e\u5b57\u5e55\u751f\u6210",
         }
-        return mode_map.get(self._current_mode_key(), "当前模式：文稿匹配（强制对齐）")
+        return mode_map.get(self._current_mode_key(), "\u5f53\u524d\u6a21\u5f0f\uff1a\u8fdc\u7a0b ASR")
 
     def _select_mode_combo(self, mode_key):
-        self._select_combo_value(self.items["modeCombo"], MODE_KEY_TO_LABEL.get(mode_key, MODE_KEY_TO_LABEL["align"]))
+        self._select_combo_value(self.items["modeCombo"], MODE_KEY_TO_LABEL.get(mode_key, MODE_KEY_TO_LABEL["asr_remote"]))
 
     def log(self, message):
         self.items["logEdit"].Append(message)
@@ -556,10 +540,10 @@ class SubtitleAgentApp(object):
 
     def set_warning(self, text):
         if text:
-            self.items["statusTitleLabel"].Text = "Step 1 · 初始化 | 警告：%s" % text
+            self.items["statusTitleLabel"].Text = "Step 1 \xb7 \u521d\u59cb\u5316 | \u8b66\u544a\uff1a%s" % text
             self.items["statusTitleLabel"].StyleSheet = "font-weight: bold; font-size: 14px; color: #d9b44a;"
         else:
-            self.items["statusTitleLabel"].Text = "Step 1 · 初始化"
+            self.items["statusTitleLabel"].Text = "Step 1 \xb7 \u521d\u59cb\u5316"
             self.items["statusTitleLabel"].StyleSheet = "font-weight: bold; font-size: 14px;"
 
     def open_progress_dialog(self, title, with_result=False, stream_output_to_result=False):
@@ -575,21 +559,21 @@ class SubtitleAgentApp(object):
             UI.VGroup(
                 {"Spacing": 6},
                 [
-                    UI.Label({"ID": "progressStageLabel", "Text": "准备中", "Weight": 0, "StyleSheet": "font-weight: bold; font-size: 14px;"}),
-                    UI.Label({"ID": "reasoningLengthLabel", "Text": "思维链文本长度：0 字符", "Weight": 0, "StyleSheet": "font-size: 11px;"}),
+                    UI.Label({"ID": "progressStageLabel", "Text": "\u51c6\u5907\u4e2d", "Weight": 0, "StyleSheet": "font-weight: bold; font-size: 14px;"}),
+                    UI.Label({"ID": "reasoningLengthLabel", "Text": "\u601d\u7ef4\u94fe\u6587\u672c\u957f\u5ea6\uff1a0 \u5b57\u7b26", "Weight": 0, "StyleSheet": "font-size: 11px;"}),
                     UI.HGroup({"Weight": 1, "Spacing": 8}, [
                         UI.VGroup({"Weight": 1, "Spacing": 2}, [
-                            UI.Label({"Text": "当前状态 / JSON 输出", "Weight": 0, "StyleSheet": "font-size: 11px;"}),
+                            UI.Label({"Text": "\u5f53\u524d\u72b6\u6001 / JSON \u8f93\u51fa", "Weight": 0, "StyleSheet": "font-size: 11px;"}),
                             UI.TextEdit({"ID": "progressLogEdit", "ReadOnly": True, "Weight": 1}),
                         ]),
                         UI.VGroup({"ID": "progressResultGroup", "Weight": 1 if with_result else 0, "Spacing": 2}, [
-                            UI.Label({"Text": "最终输出结果", "Weight": 0, "StyleSheet": "font-size: 11px;"}),
+                            UI.Label({"Text": "\u6700\u7ec8\u8f93\u51fa\u7ed3\u679c", "Weight": 0, "StyleSheet": "font-size: 11px;"}),
                             UI.TextEdit({"ID": "progressResultEdit", "ReadOnly": False, "Weight": 1}),
                         ]),
                     ]),
                     UI.HGroup({"Weight": 0, "Spacing": 6}, [
-                        UI.Button({"ID": "progressApplyBtn", "Text": "应用结果（等待生成）", "Weight": 0}),
-                        UI.Button({"ID": "progressCloseBtn", "Text": "关闭", "Weight": 0}),
+                        UI.Button({"ID": "progressApplyBtn", "Text": "\u5e94\u7528\u7ed3\u679c\uff08\u7b49\u5f85\u751f\u6210\uff09", "Weight": 0}),
+                        UI.Button({"ID": "progressCloseBtn", "Text": "\u5173\u95ed", "Weight": 0}),
                     ]),
                 ],
             ),
@@ -608,7 +592,7 @@ class SubtitleAgentApp(object):
 
         def apply_dialog(ev):
             if not self.progress_apply_callback:
-                self.progress_step("结果还未生成，暂不能应用")
+                self.progress_step("\u7ed3\u679c\u8fd8\u672a\u751f\u6210\uff0c\u6682\u4e0d\u80fd\u5e94\u7528")
                 return
             try:
                 self.save_progress_result()
@@ -617,7 +601,7 @@ class SubtitleAgentApp(object):
                 if self.progress_window == win:
                     self.progress_window = None
             except Exception as exc:
-                self.progress_step("应用结果失败：%s" % exc)
+                self.progress_step("\u5e94\u7528\u7ed3\u679c\u5931\u8d25\uff1a%s" % exc)
 
         win.On[dialog_id].Close = close_dialog
         win.On["progressCloseBtn"].Clicked = close_dialog
@@ -628,7 +612,7 @@ class SubtitleAgentApp(object):
             win.Repaint()
         except Exception:
             pass
-        self.progress_step("初始化任务")
+        self.progress_step("\u521d\u59cb\u5316\u4efb\u52a1")
         return win
 
     def progress_step(self, message):
@@ -671,8 +655,8 @@ class SubtitleAgentApp(object):
                 pass
 
     def finish_progress(self, success, message):
-        prefix = "完成" if success else "失败"
-        self.progress_step("%s：%s" % (prefix, message))
+        prefix = "\u5b8c\u6210" if success else "\u5931\u8d25"
+        self.progress_step("%s\uff1a%s" % (prefix, message))
 
     def progress_result_text(self):
         if self.progress_items and "progressResultEdit" in self.progress_items:
@@ -691,7 +675,7 @@ class SubtitleAgentApp(object):
         self.progress_apply_callback = apply_callback
         self.progress_save_callback = save_callback
         if "progressApplyBtn" in self.progress_items:
-            self.progress_items["progressApplyBtn"].Text = "应用结果" if apply_callback else "应用结果（无可应用内容）"
+            self.progress_items["progressApplyBtn"].Text = "\u5e94\u7528\u7ed3\u679c" if apply_callback else "\u5e94\u7528\u7ed3\u679c\uff08\u65e0\u53ef\u5e94\u7528\u5185\u5bb9\uff09"
         if self.progress_window:
             try:
                 self.progress_window.Update()
@@ -712,9 +696,7 @@ class SubtitleAgentApp(object):
     def _mode_output_suffix(self, mode=None):
         mode = mode or self._current_mode_key()
         mode_map = {
-            "align": "align",
             "asr_remote": "asr_remote",
-            "asr_local": "asr_local",
             "resolve_builtin": "resolve_builtin",
         }
         return mode_map.get(mode, self._safe_suffix(mode))
@@ -748,31 +730,12 @@ class SubtitleAgentApp(object):
         except Exception:
             return 1
 
-    def ensure_python_path(self):
-        python_path = (self.config.get("python_path") or "").strip()
-        if not python_path:
-            raise RuntimeError("subtitle_agent_config.json missing python_path")
-        if not os.path.exists(python_path):
-            raise RuntimeError("Configured python_path does not exist: %s" % python_path)
-        return python_path
-
     def write_temp_file(self, suffix, content):
         fd, path = tempfile.mkstemp(prefix="subtitle_agent_", suffix=suffix)
         os.close(fd)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
         return path
-
-    def prepare_reference_text(self):
-        editor_text = self.items["textEditor"].PlainText.strip()
-        file_path = self.items["textPathEdit"].Text.strip()
-        if editor_text:
-            temp_path = self.write_temp_file(".txt", editor_text)
-            self.log("Reference text staged to %s" % temp_path)
-            return temp_path
-        if file_path:
-            return file_path
-        raise RuntimeError("Reference text is required for align mode")
 
     def reference_text_content(self):
         editor_text = self.items["textEditor"].PlainText.strip()
@@ -796,6 +759,8 @@ class SubtitleAgentApp(object):
             "base_url": self.config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
             "model": self.config.get("llm_model", "deepseek-v4-flash"),
             "enable_thinking": bool(self.config.get("llm_enable_thinking", True)),
+            "timeout_seconds": 180,
+            "connection_retries": 3,
             "proofread_prompt": self.config.get("llm_proofread_prompt", DEFAULT_PROOFREAD_PROMPT),
             "translate_prompt": self.config.get("llm_translate_prompt", DEFAULT_TRANSLATE_PROMPT),
             "optimize_prompt": self.config.get("llm_optimize_prompt", DEFAULT_OPTIMIZE_PROMPT),
@@ -814,7 +779,7 @@ class SubtitleAgentApp(object):
         if not os.path.isfile(path):
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump({}, handle, ensure_ascii=False, indent=2)
-            raise RuntimeError("已生成翻译 JSON 模板，请先编辑这个文件后再点翻译: %s" % path)
+            raise RuntimeError("\u5df2\u751f\u6210\u7ffb\u8bd1 JSON \u6a21\u677f\uff0c\u8bf7\u5148\u7f16\u8f91\u8fd9\u4e2a\u6587\u4ef6\u540e\u518d\u70b9\u7ffb\u8bd1: %s" % path)
         return path
 
     def _flush_worker_log_buffer(self, buffer, force=False):
@@ -834,13 +799,18 @@ class SubtitleAgentApp(object):
             return ""
         return buffer
 
+    def _worker_python(self):
+        path = self.config.get("python_path", "")
+        if path:
+            return os.path.abspath(os.path.expanduser(path))
+        return "python3"
+
     def run_worker(self, job):
-        python_path = self.ensure_python_path()
         fd, job_path = tempfile.mkstemp(prefix="subtitle_agent_job_", suffix=".json")
         os.close(fd)
         with open(job_path, "w", encoding="utf-8") as handle:
             json.dump(job, handle, ensure_ascii=False, indent=2)
-        cmd = [python_path, CORE_PATH, "worker", job_path]
+        cmd = [self._worker_python(), CORE_PATH, "worker", job_path]
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -898,24 +868,16 @@ class SubtitleAgentApp(object):
         env["PYTHONPATH"] = module_path + os.pathsep + env.get("PYTHONPATH", "")
         tool_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
         env["PATH"] = os.pathsep.join(tool_paths + [env.get("PATH", "")])
-        cache_dir = (self.config.get("cache_dir") or "").strip()
-        if cache_dir:
-            cache_dir = os.path.abspath(os.path.expanduser(cache_dir))
-            os.makedirs(cache_dir, exist_ok=True)
-            env["MODELSCOPE_CACHE"] = cache_dir
-            env["MODELSCOPE_HUB_CACHE"] = cache_dir
-            env["FUNASR_CACHE"] = cache_dir
         if self.config.get("dashscope_api_key"):
             env["DASHSCOPE_API_KEY"] = self.config.get("dashscope_api_key")
         return env
 
     def run_streaming_worker(self, job):
-        python_path = self.ensure_python_path()
         fd, job_path = tempfile.mkstemp(prefix="subtitle_agent_stream_job_", suffix=".json")
         os.close(fd)
         with open(job_path, "w", encoding="utf-8") as handle:
             json.dump(job, handle, ensure_ascii=False, indent=2)
-        cmd = [python_path, CORE_PATH, "worker", job_path]
+        cmd = [self._worker_python(), CORE_PATH, "worker", job_path]
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -948,7 +910,13 @@ class SubtitleAgentApp(object):
             elif event_type == "result":
                 result_payload = event.get("payload")
             elif event_type == "error":
-                process.wait()
+                return_code = process.wait()
+                if process.stderr:
+                    stderr = process.stderr.read()
+                    if stderr and stderr.strip():
+                        self.log(stderr.strip())
+                if return_code not in (0, None):
+                    self.log("Streaming worker exited with code %s" % return_code)
                 raise RuntimeError(event.get("message", "Streaming worker failed"))
         if process.stderr:
             stderr = process.stderr.read()
@@ -1038,9 +1006,9 @@ class SubtitleAgentApp(object):
 
     def on_optimize_text(self, ev):
         def action():
-            self.open_progress_dialog("Subtitle Agent 文案优化", with_result=True, stream_output_to_result=True)
+            self.open_progress_dialog("Subtitle Agent \u6587\u6848\u4f18\u5316", with_result=True, stream_output_to_result=True)
             try:
-                self.progress_step("读取参考文案")
+                self.progress_step("\u8bfb\u53d6\u53c2\u8003\u6587\u6848")
                 text = self.reference_text_content()
                 job = self.llm_job_defaults()
                 job.update(
@@ -1049,7 +1017,7 @@ class SubtitleAgentApp(object):
                         "text": text,
                     }
                 )
-                self.progress_step("调用 LLM 优化参考文案")
+                self.progress_step("\u8c03\u7528 LLM \u4f18\u5316\u53c2\u8003\u6587\u6848")
                 payload = self.run_streaming_worker(job)
                 optimized = payload.get("text", "").strip()
                 if not optimized:
@@ -1068,7 +1036,7 @@ class SubtitleAgentApp(object):
                     self.log("Optimized reference text applied from %s" % output_path)
 
                 self.set_progress_result(optimized, apply_result, save_result)
-                self.finish_progress(True, "参考文案已生成并保存：%s" % output_path)
+                self.finish_progress(True, "\u53c2\u8003\u6587\u6848\u5df2\u751f\u6210\u5e76\u4fdd\u5b58\uff1a%s" % output_path)
             except Exception as exc:
                 self.finish_progress(False, str(exc))
                 raise
@@ -1081,23 +1049,23 @@ class SubtitleAgentApp(object):
                 mode = self._current_mode_key()
                 mode_suffix = self._mode_output_suffix(mode)
                 raw_srt_path = self.path_for("subtitles_%s_raw.srt" % mode_suffix)
-                self.progress_step("识别模式：%s" % mode)
+                self.progress_step("\u8bc6\u522b\u6a21\u5f0f\uff1a%s" % mode)
                 if mode == "resolve_builtin":
-                    self.progress_step("执行 Resolve 内置字幕生成")
+                    self.progress_step("\u6267\u884c Resolve \u5185\u7f6e\u5b57\u5e55\u751f\u6210")
                     result = core.generate_subtitles(int(self.config.get("default_chars_per_line", 24)))
                     self.log("Resolve generated %s subtitle items" % result["count"])
-                    self.progress_step("写入原始 SRT")
+                    self.progress_step("\u5199\u5165\u539f\u59cb SRT")
                     exported = core.export_subtitles_srt(raw_srt_path)
-                    self.progress_step("刷新 SRT 路径与预览")
+                    self.progress_step("\u5237\u65b0 SRT \u8def\u5f84\u4e0e\u9884\u89c8")
                     self.update_srt_state("raw_srt", exported)
                     self.state["final_srt"] = exported["path"]
                     self.log("Raw SRT exported to %s" % exported["path"])
-                    self.finish_progress(True, "原始 SRT 已生成：%s" % exported["path"])
+                    self.finish_progress(True, "\u539f\u59cb SRT \u5df2\u751f\u6210\uff1a%s" % exported["path"])
                     return
 
                 selected_wav = self.items["wavPathEdit"].Text.strip()
                 if selected_wav:
-                    self.progress_step("使用用户选择 WAV")
+                    self.progress_step("\u4f7f\u7528\u7528\u6237\u9009\u62e9 WAV")
                     audio_path = os.path.abspath(os.path.expanduser(selected_wav))
                     if not os.path.isfile(audio_path):
                         raise RuntimeError("WAV file does not exist: %s" % audio_path)
@@ -1105,7 +1073,7 @@ class SubtitleAgentApp(object):
                         raise RuntimeError("Please choose a .wav file: %s" % audio_path)
                     self.log("Using selected WAV file: %s" % audio_path)
                 else:
-                    self.progress_step("导出时间线音频")
+                    self.progress_step("\u5bfc\u51fa\u65f6\u95f4\u7ebf\u97f3\u9891")
                     exported_audio = self.run_worker(
                         {
                             "action": "export_audio",
@@ -1117,57 +1085,24 @@ class SubtitleAgentApp(object):
                     self.log("Audio ready at %s" % audio_path)
                 self.state["audio_path"] = audio_path
 
-                if mode == "align":
-                    self.progress_step("准备参考文稿")
-                    text_path = self.prepare_reference_text()
-                    self.progress_step("执行强制对齐")
-                    payload = self.run_worker(
-                        {
-                            "action": "align",
-                            "audio": audio_path,
-                            "text": text_path,
-                            "output": raw_srt_path,
-                            "model": self.config.get("align_model", "fa-zh"),
-                            "device": self.config.get("align_device", "cpu"),
-                            "max_chars": int(self.config.get("default_max_chars", 24)),
-                            "cache_dir": self.config.get("cache_dir", ""),
-                        }
-                    )
-                elif mode == "asr_remote":
-                    self.progress_step("执行云端 ASR")
-                    payload = self.run_worker(
-                        {
-                            "action": "asr",
-                            "audio": audio_path,
-                            "output": raw_srt_path,
-                            "lang": self.config.get("default_lang", "zh"),
-                            "max_words": int(self.config.get("default_max_words", 0)),
-                            "dashscope_api_key": self.config.get("dashscope_api_key", ""),
-                            "region": self.config.get("region", "cn"),
-                            "local": False,
-                        }
-                    )
-                else:
-                    self.progress_step("执行本地 ASR")
-                    payload = self.run_worker(
-                        {
-                            "action": "asr",
-                            "audio": audio_path,
-                            "output": raw_srt_path,
-                            "lang": self.config.get("default_lang", "zh"),
-                            "max_words": int(self.config.get("default_max_words", 0)),
-                            "local": True,
-                            "model_name": self.config.get("local_model_name", "paraformer-zh"),
-                            "device": self.config.get("local_device", "cpu"),
-                            "cache_dir": self.config.get("cache_dir", ""),
-                        }
-                    )
-                self.progress_step("写入原始 SRT")
-                self.progress_step("刷新 SRT 路径与预览")
+                self.progress_step("\u6267\u884c\u8fdc\u7a0b ASR")
+                payload = self.run_worker(
+                    {
+                        "action": "asr",
+                        "audio": audio_path,
+                        "output": raw_srt_path,
+                        "lang": self.config.get("default_lang", "zh"),
+                        "max_words": int(self.config.get("default_max_words", 0)),
+                        "dashscope_api_key": self.config.get("dashscope_api_key", ""),
+                        "region": self.config.get("region", "cn"),
+                    }
+                )
+                self.progress_step("\u5199\u5165\u539f\u59cb SRT")
+                self.progress_step("\u5237\u65b0 SRT \u8def\u5f84\u4e0e\u9884\u89c8")
                 self.update_srt_state("raw_srt", payload)
                 self.state["final_srt"] = payload["path"]
                 self.log("Raw SRT generated: %s (%s items)" % (payload["path"], payload["count"]))
-                self.finish_progress(True, "原始 SRT 已生成：%s" % payload["path"])
+                self.finish_progress(True, "\u539f\u59cb SRT \u5df2\u751f\u6210\uff1a%s" % payload["path"])
             except Exception as exc:
                 self.finish_progress(False, str(exc))
                 raise
@@ -1203,7 +1138,7 @@ class SubtitleAgentApp(object):
 
     def on_convert_srt(self, ev):
         def action():
-            self.open_progress_dialog("Subtitle Agent SRT 校对", with_result=True)
+            self.open_progress_dialog("Subtitle Agent SRT \u6821\u5bf9", with_result=True)
             try:
                 srt_path = self.items["srtPathEdit"].Text.strip()
                 if not srt_path:
@@ -1213,7 +1148,7 @@ class SubtitleAgentApp(object):
                 json_path = self.path_for("proofread.json")
                 reference_text = self.optional_reference_text_content()
                 if reference_text:
-                    self.progress_step("已附加参考文案上下文：%s 字符" % len(reference_text))
+                    self.progress_step("\u5df2\u9644\u52a0\u53c2\u8003\u6587\u6848\u4e0a\u4e0b\u6587\uff1a%s \u5b57\u7b26" % len(reference_text))
                 job = self.llm_job_defaults()
                 job.update(
                     {
@@ -1226,7 +1161,7 @@ class SubtitleAgentApp(object):
                         "reference_text": reference_text,
                     }
                 )
-                self.progress_step("调用 LLM 生成校对 JSON")
+                self.progress_step("\u8c03\u7528 LLM \u751f\u6210\u6821\u5bf9 JSON")
                 payload = self.run_streaming_worker(job)
                 result_text = self._read_text_file(payload["path"])
 
@@ -1241,7 +1176,7 @@ class SubtitleAgentApp(object):
                     self.log("Proofread SRT applied: %s" % payload["path"])
 
                 self.set_progress_result(result_text, apply_result, save_result)
-                self.finish_progress(True, "校对 SRT 已生成并保存：%s" % payload["path"])
+                self.finish_progress(True, "\u6821\u5bf9 SRT \u5df2\u751f\u6210\u5e76\u4fdd\u5b58\uff1a%s" % payload["path"])
             except Exception as exc:
                 self.finish_progress(False, str(exc))
                 raise
@@ -1259,18 +1194,18 @@ class SubtitleAgentApp(object):
             existing.Raise()
             return
         win = DISPATCHER.AddWindow(
-            {"ID": dialog_id, "WindowTitle": "选择翻译目标语言", "Geometry": [260, 220, 520, 180]},
+            {"ID": dialog_id, "WindowTitle": "\u9009\u62e9\u7ffb\u8bd1\u76ee\u6807\u8bed\u8a00", "Geometry": [260, 220, 520, 180]},
             UI.VGroup(
                 {"Spacing": 8},
                 [
-                    UI.Label({"Text": "目标语言", "Weight": 0}),
+                    UI.Label({"Text": "\u76ee\u6807\u8bed\u8a00", "Weight": 0}),
                     UI.HGroup({"Weight": 0, "Spacing": 6}, [
                         UI.ComboBox({"ID": "translateLangCombo", "Weight": 1}),
-                        UI.LineEdit({"ID": "translateLangCustom", "PlaceholderText": "自定义，如 en / ja / zh-cn", "Weight": 1}),
+                        UI.LineEdit({"ID": "translateLangCustom", "PlaceholderText": "\u81ea\u5b9a\u4e49\uff0c\u5982 en / ja / zh-cn", "Weight": 1}),
                     ]),
                     UI.HGroup({"Weight": 0, "Spacing": 6}, [
-                        UI.Button({"ID": "translateRunBtn", "Text": "开始翻译", "Weight": 0}),
-                        UI.Button({"ID": "translateCancelBtn", "Text": "取消", "Weight": 0}),
+                        UI.Button({"ID": "translateRunBtn", "Text": "\u5f00\u59cb\u7ffb\u8bd1", "Weight": 0}),
+                        UI.Button({"ID": "translateCancelBtn", "Text": "\u53d6\u6d88", "Weight": 0}),
                     ]),
                 ],
             ),
@@ -1295,7 +1230,7 @@ class SubtitleAgentApp(object):
 
     def run_translation_with_lang(self, target_lang):
         def action():
-            self.open_progress_dialog("Subtitle Agent SRT 翻译", with_result=True)
+            self.open_progress_dialog("Subtitle Agent SRT \u7ffb\u8bd1", with_result=True)
             try:
                 srt_path = self.items["srtPathEdit"].Text.strip()
                 if not srt_path:
@@ -1314,7 +1249,7 @@ class SubtitleAgentApp(object):
                         "target_lang": target_lang,
                     }
                 )
-                self.progress_step("调用 LLM 生成翻译 JSON")
+                self.progress_step("\u8c03\u7528 LLM \u751f\u6210\u7ffb\u8bd1 JSON")
                 payload = self.run_streaming_worker(job)
                 result_text = self._read_text_file(payload["path"])
 
@@ -1329,7 +1264,7 @@ class SubtitleAgentApp(object):
                     self.log("Translated SRT applied: %s" % payload["path"])
 
                 self.set_progress_result(result_text, apply_result, save_result)
-                self.finish_progress(True, "翻译 SRT 已生成并保存：%s" % payload["path"])
+                self.finish_progress(True, "\u7ffb\u8bd1 SRT \u5df2\u751f\u6210\u5e76\u4fdd\u5b58\uff1a%s" % payload["path"])
             except Exception as exc:
                 self.finish_progress(False, str(exc))
                 raise
@@ -1348,22 +1283,18 @@ class SubtitleAgentApp(object):
             return
 
         win = DISPATCHER.AddWindow(
-            {"ID": dialog_id, "WindowTitle": "Subtitle Agent Settings", "Geometry": [180, 100, 960, 760]},
+            {"ID": dialog_id, "WindowTitle": "Subtitle Agent Settings", "Geometry": [180, 100, 960, 700]},
             UI.VGroup(
                 {"Spacing": 8},
                 [
                     UI.HGroup({"Weight": 0, "Spacing": 6}, [
-                        UI.Label({"Text": "output_base_dir", "Weight": 0}),
+                        UI.Label({"Text": "\u8f93\u51fa\u76ee\u5f55", "Weight": 0}),
                         UI.LineEdit({"ID": "settingsOutputDir", "Text": self.config.get("custom_output_dir", self._default_output_dir()), "Weight": 3}),
                     ]),
                     UI.HGroup({"Weight": 0, "Spacing": 6}, [
-                        UI.Label({"Text": "python_path", "Weight": 0}),
-                        UI.LineEdit({"ID": "settingsPythonPath", "Text": self.config.get("python_path", ""), "Weight": 3}),
-                    ]),
-                    UI.HGroup({"Weight": 0, "Spacing": 6}, [
-                        UI.Label({"Text": "语言", "Weight": 0}),
+                        UI.Label({"Text": "\u8bed\u8a00", "Weight": 0}),
                         UI.ComboBox({"ID": "settingsLang", "Weight": 2}),
-                        UI.Label({"Text": "目标语言", "Weight": 0}),
+                        UI.Label({"Text": "\u76ee\u6807\u8bed\u8a00", "Weight": 0}),
                         UI.ComboBox({"ID": "settingsTargetLang", "Weight": 1}),
                     ]),
                     UI.HGroup({"Weight": 0, "Spacing": 6}, [
@@ -1373,20 +1304,6 @@ class SubtitleAgentApp(object):
                         UI.SpinBox({"ID": "settingsMaxChars", "Minimum": 0, "Maximum": 200, "Value": int(self.config.get("default_max_chars", 24)), "Weight": 0}),
                         UI.Label({"Text": "chars_per_line", "Weight": 0}),
                         UI.SpinBox({"ID": "settingsCharsPerLine", "Minimum": 1, "Maximum": 200, "Value": int(self.config.get("default_chars_per_line", 24)), "Weight": 0}),
-                    ]),
-                    UI.HGroup({"Weight": 0, "Spacing": 6}, [
-                        UI.Label({"Text": "align_model", "Weight": 0}),
-                        UI.LineEdit({"ID": "settingsAlignModel", "Text": self.config.get("align_model", "fa-zh"), "Weight": 1}),
-                        UI.Label({"Text": "align_device", "Weight": 0}),
-                        UI.LineEdit({"ID": "settingsAlignDevice", "Text": self.config.get("align_device", "cpu"), "Weight": 1}),
-                    ]),
-                    UI.HGroup({"Weight": 0, "Spacing": 6}, [
-                        UI.Label({"Text": "local_model", "Weight": 0}),
-                        UI.LineEdit({"ID": "settingsLocalModel", "Text": self.config.get("local_model_name", "paraformer-zh"), "Weight": 1}),
-                        UI.Label({"Text": "local_device", "Weight": 0}),
-                        UI.LineEdit({"ID": "settingsLocalDevice", "Text": self.config.get("local_device", "cpu"), "Weight": 1}),
-                        UI.Label({"Text": "cache_dir", "Weight": 0}),
-                        UI.LineEdit({"ID": "settingsCacheDir", "Text": self.config.get("cache_dir", ""), "Weight": 1}),
                     ]),
                     UI.HGroup({"Weight": 0, "Spacing": 6}, [
                         UI.Label({"Text": "DashScope Key", "Weight": 0}),
@@ -1404,15 +1321,15 @@ class SubtitleAgentApp(object):
                         UI.Label({"Text": "llm_base_url", "Weight": 0}),
                         UI.LineEdit({"ID": "settingsLlmBaseUrl", "Text": self.config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"), "Weight": 3}),
                     ]),
-                    UI.Label({"Text": "校对提示词", "Weight": 0}),
+                    UI.Label({"Text": "\u6821\u5bf9\u63d0\u793a\u8bcd", "Weight": 0}),
                     UI.TextEdit({"ID": "settingsProofreadPrompt", "PlainText": self.config.get("llm_proofread_prompt", DEFAULT_PROOFREAD_PROMPT), "Weight": 1}),
-                    UI.Label({"Text": "翻译提示词（可使用 {target_lang}）", "Weight": 0}),
+                    UI.Label({"Text": "\u7ffb\u8bd1\u63d0\u793a\u8bcd\uff08\u53ef\u4f7f\u7528 {target_lang}\uff09", "Weight": 0}),
                     UI.TextEdit({"ID": "settingsTranslatePrompt", "PlainText": self.config.get("llm_translate_prompt", DEFAULT_TRANSLATE_PROMPT), "Weight": 1}),
-                    UI.Label({"Text": "文案优化提示词", "Weight": 0}),
+                    UI.Label({"Text": "\u6587\u6848\u4f18\u5316\u63d0\u793a\u8bcd", "Weight": 0}),
                     UI.TextEdit({"ID": "settingsOptimizePrompt", "PlainText": self.config.get("llm_optimize_prompt", DEFAULT_OPTIMIZE_PROMPT), "Weight": 1}),
                     UI.HGroup({"Weight": 0, "Spacing": 6}, [
-                        UI.Button({"ID": "settingsSaveBtn", "Text": "保存设置", "Weight": 0}),
-                        UI.Button({"ID": "settingsCloseBtn", "Text": "关闭", "Weight": 0}),
+                        UI.Button({"ID": "settingsSaveBtn", "Text": "\u4fdd\u5b58\u8bbe\u7f6e", "Weight": 0}),
+                        UI.Button({"ID": "settingsCloseBtn", "Text": "\u5173\u95ed", "Weight": 0}),
                     ]),
                 ],
             ),
@@ -1433,17 +1350,11 @@ class SubtitleAgentApp(object):
         def save_dialog(ev):
             self.config["output_dir_mode"] = "custom"
             self.config["custom_output_dir"] = expand_user_path(items["settingsOutputDir"].Text.strip() or default_user_asr_dir())
-            self.config["python_path"] = expand_user_path(items["settingsPythonPath"].Text.strip())
             self.config["default_lang"] = items["settingsLang"].CurrentText or "zh"
             self.config["target_lang"] = items["settingsTargetLang"].CurrentText or "zh-cn"
             self.config["default_max_words"] = int(items["settingsMaxWords"].Value)
             self.config["default_max_chars"] = int(items["settingsMaxChars"].Value)
             self.config["default_chars_per_line"] = int(items["settingsCharsPerLine"].Value)
-            self.config["align_model"] = items["settingsAlignModel"].Text.strip() or "fa-zh"
-            self.config["align_device"] = items["settingsAlignDevice"].Text.strip() or "cpu"
-            self.config["local_model_name"] = items["settingsLocalModel"].Text.strip() or "paraformer-zh"
-            self.config["local_device"] = items["settingsLocalDevice"].Text.strip() or "cpu"
-            self.config["cache_dir"] = expand_user_path(items["settingsCacheDir"].Text.strip())
             self.config["dashscope_api_key"] = items["settingsApiKey"].Text.strip()
             self.config["region"] = items["settingsRegion"].CurrentText or "cn"
             self.config["llm_model"] = items["settingsLlmModel"].Text.strip() or "deepseek-v4-flash"
@@ -1453,11 +1364,11 @@ class SubtitleAgentApp(object):
             self.config["llm_translate_prompt"] = items["settingsTranslatePrompt"].PlainText.strip() or DEFAULT_TRANSLATE_PROMPT
             self.config["llm_optimize_prompt"] = items["settingsOptimizePrompt"].PlainText.strip() or DEFAULT_OPTIMIZE_PROMPT
             persisted = dict(self.config)
-            for key in ("python_path", "custom_output_dir", "cache_dir"):
+            for key in ("custom_output_dir",):
                 persisted[key] = compact_user_path(persisted.get(key))
             with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
                 json.dump(persisted, handle, ensure_ascii=False, indent=2)
-            self._select_mode_combo(self.config.get("recognition_mode", "align"))
+            self._select_mode_combo(self.config.get("recognition_mode", "asr_remote"))
             self.state["output_dir_overridden"] = False
             self._set_auto_output_dir()
             self.log("Settings saved.")
