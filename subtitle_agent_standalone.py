@@ -3,18 +3,20 @@
 Subtitle Agent - GUI and CLI
 
 GUI:
-  python3 subtitle_agent_gui.py
+  python3 subtitle_agent_standalone.py
 
 CLI:
-  python3 subtitle_agent_gui.py asr input.wav output.srt
-  python3 subtitle_agent_gui.py proofread input.srt output.srt
-  python3 subtitle_agent_gui.py translate input.srt output.srt --target en
-  python3 subtitle_agent_gui.py optimize input.txt output.txt
-  python3 subtitle_agent_gui.py convert input.srt output.srt --lang zh-tw
-  python3 subtitle_agent_gui.py read input.srt
+  python3 subtitle_agent_standalone.py asr input.wav output.srt
+  python3 subtitle_agent_standalone.py proofread input.srt output.srt
+  python3 subtitle_agent_standalone.py translate input.srt output.srt --target en
+  python3 subtitle_agent_standalone.py optimize input.txt output.txt
+  python3 subtitle_agent_standalone.py convert input.srt output.srt --lang zh-tw
+  python3 subtitle_agent_standalone.py read input.srt
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -45,6 +47,32 @@ def load_config():
 def save_config(config):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def run_streaming_job(job, on_event=None):
+    buffer = io.StringIO()
+    runner = core.run_llm_srt_edit_stream if job.get("action") == "llm_srt_edit" else core.run_llm_optimize_text_stream
+    with contextlib.redirect_stdout(buffer):
+        runner(job)
+    result = None
+    for raw_line in buffer.getvalue().splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+        if on_event:
+            on_event(event)
+        event_type = event.get("type")
+        if event_type == "error":
+            raise RuntimeError(event.get("message", "Streaming worker failed"))
+        if event_type == "result":
+            result = event.get("payload") or {}
+    if result is None:
+        raise RuntimeError("Streaming worker returned no result")
+    return result
 
 
 # ── Application ────────────────────────────────────────────────────
@@ -358,6 +386,22 @@ class SubtitleAgentGUI:
         name = os.path.splitext(os.path.basename(base) if base else "output")[0]
         return os.path.join(d, "%s_%s.srt" % (name, suffix))
 
+    def _json_output_path(self, output_path, suffix):
+        directory = os.path.dirname(os.path.abspath(output_path))
+        os.makedirs(directory, exist_ok=True)
+        name = os.path.splitext(os.path.basename(output_path))[0]
+        return os.path.join(directory, "%s_%s.json" % (name, suffix))
+
+    def _reference_text(self):
+        text = self.text_editor.get(1.0, tk.END).strip()
+        if text:
+            return text
+        path = self.text_path_var.get().strip()
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        return ""
+
     # ── Actions ────────────────────────────────────────────────────
     def _run_asr(self):
         wav = self.wav_path_var.get().strip()
@@ -402,26 +446,29 @@ class SubtitleAgentGUI:
         if not path:
             return
 
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-
         output = self._output_path(path, "proofread")
+        json_output = self._json_output_path(output, "proofread")
         prompt = self.config.get("llm_proofread_prompt", "")
+        reference_text = self._reference_text()
 
         job = {
             "action": "llm_srt_edit", "mode": "proofread",
-            "srt_content": content, "output_path": os.path.abspath(output),
-            "dashscope_api_key": api_key,
-            "llm_model": self.config.get("llm_model", "deepseek-v4-flash"),
-            "llm_base_url": self.config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            "llm_proofread_prompt": prompt,
-            "llm_enable_thinking": self.config.get("llm_enable_thinking", False),
+            "input": os.path.abspath(path),
+            "output": os.path.abspath(output),
+            "json_output": os.path.abspath(json_output),
+            "api_key": api_key,
+            "model": self.config.get("llm_model", "deepseek-v4-flash"),
+            "base_url": self.config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "proofread_prompt": prompt,
+            "reference_text": reference_text,
+            "enable_thinking": self.config.get("llm_enable_thinking", False),
         }
 
         def run():
             self.log("校对开始: %s" % os.path.basename(path))
-            core.run_llm_srt_edit_stream(job)
+            run_streaming_job(job)
             self.log("校对完成 -> %s" % output)
+            self.log("校对 JSON -> %s" % json_output)
             self._view_srt(output)
 
         self._run_thread(run)
@@ -436,28 +483,29 @@ class SubtitleAgentGUI:
         if not path:
             return
 
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-
         target = "en"
         output = self._output_path(path, target)
+        json_output = self._json_output_path(output, target)
         prompt = self.config.get("llm_translate_prompt", "")
 
         job = {
             "action": "llm_srt_edit", "mode": "translate",
-            "srt_content": content, "target_lang": target,
-            "output_path": os.path.abspath(output),
-            "dashscope_api_key": api_key,
-            "llm_model": self.config.get("llm_model", "deepseek-v4-flash"),
-            "llm_base_url": self.config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            "llm_translate_prompt": prompt,
-            "llm_enable_thinking": self.config.get("llm_enable_thinking", False),
+            "input": os.path.abspath(path),
+            "output": os.path.abspath(output),
+            "json_output": os.path.abspath(json_output),
+            "target_lang": target,
+            "api_key": api_key,
+            "model": self.config.get("llm_model", "deepseek-v4-flash"),
+            "base_url": self.config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "translate_prompt": prompt,
+            "enable_thinking": self.config.get("llm_enable_thinking", False),
         }
 
         def run():
             self.log("翻译开始: %s -> %s" % (os.path.basename(path), target))
-            core.run_llm_srt_edit_stream(job)
+            run_streaming_job(job)
             self.log("翻译完成 -> %s" % output)
+            self.log("翻译 JSON -> %s" % json_output)
             self._view_srt(output)
 
         self._run_thread(run)
@@ -474,20 +522,21 @@ class SubtitleAgentGUI:
         output = os.path.join(self.out_dir_var.get().strip() or os.path.expanduser("~/Documents/subtitle_agent"), "reference_optimized.txt")
         prompt = self.config.get("llm_optimize_prompt", "")
         job = {
-            "action": "llm_optimize_text", "text_content": text,
-            "output_path": os.path.abspath(output),
-            "dashscope_api_key": api_key,
-            "llm_model": self.config.get("llm_model", "deepseek-v4-flash"),
-            "llm_base_url": self.config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-            "llm_optimize_prompt": prompt,
-            "llm_enable_thinking": self.config.get("llm_enable_thinking", False),
+            "action": "llm_optimize_text",
+            "text": text,
+            "api_key": api_key,
+            "model": self.config.get("llm_model", "deepseek-v4-flash"),
+            "base_url": self.config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+            "optimize_prompt": prompt,
+            "enable_thinking": self.config.get("llm_enable_thinking", False),
         }
         def run():
             self.log("优化开始...")
-            core.run_llm_optimize_text_stream(job)
+            result = run_streaming_job(job)
+            optimized = result["text"]
+            with open(output, "w", encoding="utf-8") as f:
+                f.write(optimized)
             self.log("优化完成 -> %s" % output)
-            with open(output, "r", encoding="utf-8") as f:
-                optimized = f.read()
             self.text_editor.delete(1.0, tk.END)
             self.text_editor.insert(1.0, optimized)
             self.log("已更新编辑区内容")
@@ -527,15 +576,17 @@ def _cli_proofread(args):
     api_key = args.api_key or config.get("dashscope_api_key") or os.environ.get("DASHSCOPE_API_KEY", "")
     if not api_key:
         print("Error: API key required", file=sys.stderr); sys.exit(1)
-    with open(args.input, "r", encoding="utf-8") as f:
-        content = f.read()
     prompt = config.get("llm_proofread_prompt", "")
-    job = {"action": "llm_srt_edit", "mode": "proofread", "srt_content": content,
-           "output_path": os.path.abspath(args.output), "dashscope_api_key": api_key,
-           "llm_model": config.get("llm_model", "deepseek-v4-flash"),
-           "llm_base_url": config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-           "llm_proofread_prompt": prompt, "llm_enable_thinking": config.get("llm_enable_thinking", False)}
-    core.run_llm_srt_edit_stream(job)
+    json_output = os.path.join(
+        os.path.dirname(os.path.abspath(args.output)),
+        "%s_proofread.json" % os.path.splitext(os.path.basename(args.output))[0],
+    )
+    job = {"action": "llm_srt_edit", "mode": "proofread", "input": os.path.abspath(args.input),
+           "output": os.path.abspath(args.output), "json_output": os.path.abspath(json_output), "api_key": api_key,
+           "model": config.get("llm_model", "deepseek-v4-flash"),
+           "base_url": config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+           "proofread_prompt": prompt, "enable_thinking": config.get("llm_enable_thinking", False)}
+    run_streaming_job(job)
     print("Done -> %s" % args.output)
 
 def _cli_translate(args):
@@ -543,15 +594,17 @@ def _cli_translate(args):
     api_key = args.api_key or config.get("dashscope_api_key") or os.environ.get("DASHSCOPE_API_KEY", "")
     if not api_key:
         print("Error: API key required", file=sys.stderr); sys.exit(1)
-    with open(args.input, "r", encoding="utf-8") as f:
-        content = f.read()
     prompt = config.get("llm_translate_prompt", "")
-    job = {"action": "llm_srt_edit", "mode": "translate", "srt_content": content, "target_lang": args.target,
-           "output_path": os.path.abspath(args.output), "dashscope_api_key": api_key,
-           "llm_model": config.get("llm_model", "deepseek-v4-flash"),
-           "llm_base_url": config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-           "llm_translate_prompt": prompt, "llm_enable_thinking": config.get("llm_enable_thinking", False)}
-    core.run_llm_srt_edit_stream(job)
+    json_output = os.path.join(
+        os.path.dirname(os.path.abspath(args.output)),
+        "%s_%s.json" % (os.path.splitext(os.path.basename(args.output))[0], args.target),
+    )
+    job = {"action": "llm_srt_edit", "mode": "translate", "input": os.path.abspath(args.input), "target_lang": args.target,
+           "output": os.path.abspath(args.output), "json_output": os.path.abspath(json_output), "api_key": api_key,
+           "model": config.get("llm_model", "deepseek-v4-flash"),
+           "base_url": config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+           "translate_prompt": prompt, "enable_thinking": config.get("llm_enable_thinking", False)}
+    run_streaming_job(job)
     print("Done -> %s" % args.output)
 
 def _cli_optimize(args):
@@ -559,15 +612,17 @@ def _cli_optimize(args):
     api_key = args.api_key or config.get("dashscope_api_key") or os.environ.get("DASHSCOPE_API_KEY", "")
     if not api_key:
         print("Error: API key required", file=sys.stderr); sys.exit(1)
+    prompt = config.get("llm_optimize_prompt", "")
     with open(args.input, "r", encoding="utf-8") as f:
         content = f.read()
-    prompt = config.get("llm_optimize_prompt", "")
-    job = {"action": "llm_optimize_text", "text_content": content,
-           "output_path": os.path.abspath(args.output), "dashscope_api_key": api_key,
-           "llm_model": config.get("llm_model", "deepseek-v4-flash"),
-           "llm_base_url": config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-           "llm_optimize_prompt": prompt, "llm_enable_thinking": config.get("llm_enable_thinking", False)}
-    core.run_llm_optimize_text_stream(job)
+    job = {"action": "llm_optimize_text", "text": content,
+           "api_key": api_key,
+           "model": config.get("llm_model", "deepseek-v4-flash"),
+           "base_url": config.get("llm_base_url", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+           "optimize_prompt": prompt, "enable_thinking": config.get("llm_enable_thinking", False)}
+    result = run_streaming_job(job)
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write(result["text"])
     print("Done -> %s" % args.output)
 
 def _cli_convert(args):

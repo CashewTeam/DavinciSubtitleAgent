@@ -18,7 +18,7 @@ LEGACY_SCRIPT_IDS = [
     "com.codex.resolve.SubtitleAgent",
     "com.codex.resolve.SubtitleAgent.v2",
 ]
-APP_VERSION = "2026-06-08.43"
+APP_VERSION = "2026-06-11.44"
 
 MODE_LABELS = [
     ("asr_remote", "远程 ASR"),
@@ -29,9 +29,13 @@ MODE_KEY_TO_LABEL = dict(MODE_LABELS)
 
 
 DEFAULT_PROOFREAD_PROMPT = (
-    "请作为专业影视字幕校对编辑，对每条字幕进行精修：修正错别字、ASR 误识别、断句、"
-    "标点、中英空格、口语不顺和明显术语错误；保持原意、语气、人物称呼和专有名词一致；"
-    "避免过度改写，字幕应简洁自然，适合屏幕阅读。不要改变序号和时码。"
+    "请作为专业影视字幕校对编辑，阅读整份 SRT 并输出一个用于全局文本替换的 JSON 词典。"
+    "你的任务是找出需要修正的错别字、ASR 误识别、术语错误、英文大小写/拼写错误、中英空格问题和明显不自然的短语，"
+    "将错误文本映射到正确文本。只输出 JSON，不要解释，不要输出 markdown。"
+    "输出格式固定为 {\"replacements\":{\"错误文本\":\"正确文本\"}}。"
+    "不要输出行号、序号、时码，不要重写整条字幕。"
+    "尽量输出最小但安全的替换单元，避免过短到误伤其他字幕。"
+    "如果无需修改，输出 {\"replacements\":{}}。"
 )
 DEFAULT_TRANSLATE_PROMPT = (
     "请将每条字幕翻译为目标语言 {target_lang}。要求：自然口语、影视字幕风格、简洁易读；"

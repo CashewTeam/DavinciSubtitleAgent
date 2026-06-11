@@ -52,9 +52,13 @@ REGION_URLS = {
 }
 
 DEFAULT_PROOFREAD_PROMPT = (
-    "请作为专业影视字幕校对编辑，对每条字幕进行精修：修正错别字、ASR 误识别、断句，字幕末尾多余标点符号需要去除；"
-    "中英空格、英文大小写拼写错误、口语不顺和明显术语错误；保持原意、语气、人物称呼和专有名词一致；"
-    "避免过度改写，字幕应简洁自然，适合屏幕阅读。不要改变序号和时码。"
+    "请作为专业影视字幕校对编辑，阅读整份 SRT 并输出一个用于全局文本替换的 JSON 词典。"
+    "你的任务是找出需要修正的错别字、ASR 误识别、术语错误、英文大小写/拼写错误、中英空格问题和明显不自然的短语，"
+    "将错误文本映射到正确文本。只输出 JSON，不要解释，不要输出 markdown。"
+    "输出格式固定为 {\"replacements\":{\"错误文本\":\"正确文本\"}}。"
+    "不要输出行号、序号、时码，不要重写整条字幕。"
+    "尽量输出最小但安全的替换单元，避免过短到误伤其他字幕。"
+    "如果无需修改，输出 {\"replacements\":{}}。"
 )
 DEFAULT_TRANSLATE_PROMPT = (
     "请将每条字幕翻译为目标语言 {target_lang}。要求：自然口语、影视字幕风格、简洁易读；"
@@ -65,6 +69,7 @@ DEFAULT_OPTIMIZE_PROMPT = (
     "如果单行文本过长，使用逗号拆分为两句，专有英语名词首字母大写，以及修正其他英文大小写错误；"
     "保留原始语义、顺序、人物称呼和专有名词。只输出优化后的纯文本，不要解释。"
 )
+SHORT_SUBTITLE_GAP_MS = 800
 
 SRT_TIME_RE = re.compile(r"^(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -258,19 +263,19 @@ def export_subtitles_srt(output_path):
     project = _require_project()
     fps_str = project.GetSetting("timelineFrameRate")
     fps = float(fps_str) if fps_str else 24.0
-    lines = []
+    entries = []
     for idx, item in enumerate(items, 1):
-        lines.append(str(idx))
-        lines.append(
-            "%s --> %s"
-            % (_frames_to_srt_tc(item.GetStart(), fps), _frames_to_srt_tc(item.GetEnd(), fps))
+        entries.append(
+            {
+                "index": idx,
+                "start": _frames_to_srt_tc(item.GetStart(), fps),
+                "end": _frames_to_srt_tc(item.GetEnd(), fps),
+                "text": _plain_subtitle_text(item.GetName()),
+            }
         )
-        lines.append(_plain_subtitle_text(item.GetName()))
-        lines.append("")
     output_path = os.path.abspath(output_path)
     ensure_dir(os.path.dirname(output_path) or ".")
-    with open(output_path, "w", encoding="utf-8") as handle:
-        handle.write("\n".join(lines))
+    _write_srt_entries(output_path, entries)
     return read_srt_file(output_path)
 
 
@@ -689,6 +694,40 @@ def _ms_to_srt(ms):
     return "%02d:%02d:%02d,%03d" % (hours, minutes, seconds, millis)
 
 
+def _srt_to_ms(value):
+    match = re.match(r"^(\d{2}):(\d{2}):(\d{2}),(\d{3})$", str(value or "").strip())
+    if not match:
+        raise RuntimeError("Invalid SRT timecode: %s" % value)
+    hours, minutes, seconds, millis = [int(part) for part in match.groups()]
+    return (((hours * 60) + minutes) * 60 + seconds) * 1000 + millis
+
+
+def _collapse_short_gaps(entries, min_gap_ms=SHORT_SUBTITLE_GAP_MS):
+    if not entries:
+        return []
+    normalized = [
+        {
+            "index": entry["index"],
+            "start": entry["start"],
+            "end": entry["end"],
+            "text": entry["text"],
+        }
+        for entry in entries
+    ]
+    for index in range(len(normalized) - 1):
+        current = normalized[index]
+        following = normalized[index + 1]
+        current_end_ms = _srt_to_ms(current["end"])
+        next_start_ms = _srt_to_ms(following["start"])
+        gap_ms = next_start_ms - current_end_ms
+        if 0 < gap_ms < int(min_gap_ms):
+            midpoint_ms = current_end_ms + (gap_ms // 2)
+            midpoint_tc = _ms_to_srt(midpoint_ms)
+            current["end"] = midpoint_tc
+            following["start"] = midpoint_tc
+    return normalized
+
+
 def _init_dashscope(config):
     import dashscope
 
@@ -844,13 +883,12 @@ def run_asr(job):
     file_url = _upload_audio(audio_path, logs)
     result = _transcribe_remote(file_url, language, config, logs)
     srt_text, count = _result_to_srt(result, max_words=max_words)
-    with open(output_path, "w", encoding="utf-8") as handle:
-        handle.write(srt_text)
+    _write_srt_entries(output_path, parse_srt_content(srt_text))
     srt_data = read_srt_file(output_path)
     return {
         "success": True,
         "path": output_path,
-        "count": count,
+        "count": len(srt_data["items"]),
         "items": srt_data["items"],
         "logs": logs,
         "logs_streamed": True,
@@ -891,6 +929,7 @@ def _read_srt_entries(path):
 
 
 def _write_srt_entries(path, entries):
+    entries = _collapse_short_gaps(entries)
     lines = []
     for entry in entries:
         lines.append(str(entry["index"]))
@@ -1050,14 +1089,65 @@ def _require_llm_config(job):
 
 def _extract_json_object(text):
     text = (text or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
-        raise RuntimeError("LLM response did not contain a JSON object")
-    return json.loads(text[start : end + 1])
+    if not text:
+        raise RuntimeError("LLM response was empty")
+
+    candidates = [text]
+    fence_matches = re.findall(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    for match in fence_matches:
+        match = (match or "").strip()
+        if match:
+            candidates.insert(0, match)
+
+    decoder = json.JSONDecoder()
+    parse_errors = []
+
+    for candidate in candidates:
+        for match in re.finditer(r"\{", candidate):
+            start = match.start()
+            try:
+                parsed, _ = decoder.raw_decode(candidate[start:])
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception as exc:
+                parse_errors.append(str(exc))
+
+        in_string = False
+        escaped = False
+        depth = 0
+        start = None
+        for index, char in enumerate(candidate):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+                continue
+            if char == "{":
+                if depth == 0:
+                    start = index
+                depth += 1
+            elif char == "}":
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start is not None:
+                        snippet = candidate[start : index + 1]
+                        try:
+                            parsed = json.loads(snippet)
+                            if isinstance(parsed, dict):
+                                return parsed
+                        except Exception as exc:
+                            parse_errors.append(str(exc))
+                        start = None
+
+    detail = parse_errors[-1] if parse_errors else "no JSON object found"
+    preview = text[:400].replace("\n", "\\n")
+    raise RuntimeError("Failed to parse LLM JSON object: %s. Preview: %s" % (detail, preview))
 
 
 def _validate_llm_srt_json(data):
@@ -1073,6 +1163,34 @@ def _validate_llm_srt_json(data):
     return {"items": normalized}
 
 
+def _validate_llm_replacements_json(data):
+    if not isinstance(data, dict):
+        raise RuntimeError("LLM proofread JSON must be an object with a replacements mapping")
+    replacements = data.get("replacements")
+    if not isinstance(replacements, dict):
+        raise RuntimeError("LLM proofread JSON must contain a replacements object")
+    normalized = []
+    for wrong, correct in replacements.items():
+        wrong_text = str(wrong or "").strip()
+        correct_text = str(correct or "").strip()
+        if not wrong_text or wrong_text == correct_text:
+            continue
+        normalized.append((wrong_text, correct_text))
+    return {"replacements": dict(normalized)}
+
+
+def _normalized_replacement_items(replacements):
+    normalized = []
+    for wrong, correct in (replacements or {}).items():
+        wrong_text = str(wrong or "").strip()
+        correct_text = str(correct or "").strip()
+        if not wrong_text or wrong_text == correct_text:
+            continue
+        normalized.append((wrong_text, correct_text))
+    normalized.sort(key=lambda item: len(item[0]), reverse=True)
+    return normalized
+
+
 def _apply_index_text_edits(input_path, output_path, edit_json):
     entries = _read_srt_entries(input_path)
     edits = {int(item["index"]): item["text"] for item in edit_json.get("items", [])}
@@ -1085,6 +1203,30 @@ def _apply_index_text_edits(input_path, output_path, edit_json):
     _write_srt_entries(output_path, entries)
     result = read_srt_file(output_path)
     result.update({"changed_count": changed_count})
+    return result
+
+
+def _apply_replacements_to_srt(input_path, output_path, replacements_json):
+    entries = _read_srt_entries(input_path)
+    replacements = _normalized_replacement_items(replacements_json.get("replacements") or {})
+    changed_count = 0
+    for entry in entries:
+        original_text = entry["text"]
+        updated_text = original_text
+        placeholders = []
+        for index, (wrong, correct) in enumerate(replacements):
+            placeholder = "__SUBTITLE_AGENT_REPL_%s__" % index
+            if wrong in updated_text:
+                updated_text = updated_text.replace(wrong, placeholder)
+                placeholders.append((placeholder, correct))
+        for placeholder, correct in placeholders:
+            updated_text = updated_text.replace(placeholder, correct)
+        if updated_text != original_text:
+            entry["text"] = updated_text
+            changed_count += 1
+    _write_srt_entries(output_path, entries)
+    result = read_srt_file(output_path)
+    result.update({"changed_count": changed_count, "replacement_count": len(replacements)})
     return result
 
 
@@ -1189,9 +1331,12 @@ def run_llm_srt_edit_stream(job):
         {
             "role": "system",
             "content": (
-                "你是专业影视字幕编辑。必须只输出 JSON 对象，格式为 "
+                "你是专业影视字幕编辑。"
+                "当任务是校对时，必须只输出 JSON 对象，格式为 "
+                "{\"replacements\":{\"错误文本\":\"正确文本\"}}。"
+                "当任务是翻译时，必须只输出 JSON 对象，格式为 "
                 "{\"items\":[{\"index\":1,\"text\":\"修改后的字幕文本\"}]}。"
-                "只包含需要改动或确认后的条目，不输出 markdown。"
+                "不要输出 markdown 或解释。"
             ),
         },
         {
@@ -1202,11 +1347,17 @@ def run_llm_srt_edit_stream(job):
     _stream_event("status", message="调用 LLM 生成%s JSON" % mode_text)
     answer = _llm_stream_chat(job, messages)
     _stream_event("status", message="解析 LLM JSON")
-    edit_json = _validate_llm_srt_json(_extract_json_object(answer))
+    if mode == "translate":
+        edit_json = _validate_llm_srt_json(_extract_json_object(answer))
+    else:
+        edit_json = _validate_llm_replacements_json(_extract_json_object(answer))
     ensure_dir(os.path.dirname(json_output) or ".")
     write_json(json_output, edit_json)
     _stream_event("status", message="应用 JSON 到新 SRT")
-    result = _apply_index_text_edits(input_path, output_path, edit_json)
+    if mode == "translate":
+        result = _apply_index_text_edits(input_path, output_path, edit_json)
+    else:
+        result = _apply_replacements_to_srt(input_path, output_path, edit_json)
     result.update(
         {
             "json_path": json_output,
