@@ -10,9 +10,8 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 
 - 连接当前 DaVinci Resolve 项目与时间线。
 - 导出时间线音频、导出当前时间线字幕、导入最终 SRT 到时间线。
-- 三种字幕识别模式：
+- 两种字幕识别模式：
   - 远程 ASR
-  - 强制对齐（Beta）
   - Resolve 原生识别
 - 使用 OpenAI 兼容接口接入 DashScope / DeepSeek 做 SRT 校对、翻译、参考文案优化。
 - 在结果窗口中手动编辑 LLM 输出，再决定是否应用到主页。
@@ -141,12 +140,6 @@ pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
 
-然后在设置页里把 `python_path` 指向：
-
-```text
-~/Documents/asr/venv/bin/python
-```
-
 ### 4. 配置 API Key
 
 远程 ASR 与 LLM 功能需要 DashScope API Key。
@@ -159,13 +152,12 @@ pip install -r requirements.txt
 
 ## 当前识别模式
 
-主 app 只保留三种识别模式：
+主 app 只保留两种识别模式：
 
 - `远程 ASR（云端识别）`
-- `强制对齐（Beta，需要参考文案）`
 - `Resolve 原生识别（当前时间线）`
 
-本地 ASR 已从 UI 和主流程中移除。
+本地 ASR 与强制对齐已从 UI 和主流程中移除。
 
 ## CLI
 
@@ -174,9 +166,6 @@ pip install -r requirements.txt
 ```bash
 # 远程 ASR
 python3 subtitle_agent_app.py asr audio.wav subtitles.srt
-
-# 强制对齐
-python3 subtitle_agent_app.py align audio.wav transcript.txt output.srt
 
 # 校对 SRT
 python3 subtitle_agent_app.py proofread input.srt output.srt
@@ -199,9 +188,7 @@ python3 subtitle_agent_app.py read subtitles.srt
 输出文件会带模式后缀，例如：
 
 ```text
-Project_audio_align.wav
 Project_subtitles_asr_remote_raw.srt
-Project_subtitles_align_raw.srt
 Project_subtitles_resolve_builtin_raw.srt
 Project_subtitles_zh_cn.srt
 Project_reference_optimized.txt
@@ -227,16 +214,6 @@ brew install ffmpeg
 which ffmpeg
 which ffprobe
 ```
-
-### 强制对齐不可用
-
-确认当前 worker Python 环境安装了：
-
-```bash
-python3 -c "import funasr; print('OK')"
-```
-
-并且设置页里的 `align_model`、`align_device`、`cache_dir` 已配置。
 
 ### 打包后的 app 无法读到配置
 

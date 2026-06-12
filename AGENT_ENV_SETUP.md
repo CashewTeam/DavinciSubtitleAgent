@@ -52,7 +52,6 @@ This installs the source-mode dependencies used by:
 
 - CustomTkinter GUI
 - DashScope remote ASR
-- FunASR forced alignment
 - OpenAI-compatible LLM proofreading / translation / text optimization
 - PyInstaller packaging
 
@@ -68,9 +67,7 @@ Minimum recommended fields:
 
 ```json
 {
-  "python_path": "~/Documents/asr/venv/bin/python",
   "custom_output_dir": "~/Documents/asr",
-  "cache_dir": "~/Documents/asr",
   "dashscope_api_key": "your-dashscope-api-key"
 }
 ```
@@ -81,15 +78,6 @@ LLM defaults:
 {
   "llm_model": "deepseek-v4-flash",
   "llm_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
-}
-```
-
-Forced alignment defaults:
-
-```json
-{
-  "align_model": "fa-zh",
-  "align_device": "cpu"
 }
 ```
 
@@ -106,8 +94,7 @@ Check the following:
 1. The app opens normally.
 2. Settings can be saved.
 3. `远程 ASR` works after filling API key.
-4. `强制对齐（Beta）` works after providing WAV + reference text.
-5. `Resolve 原生识别` works when Resolve is running and scripting is available.
+4. `Resolve 原生识别` works when Resolve is running and scripting is available.
 
 ## 6. Verify Resolve bridge
 
@@ -146,7 +133,6 @@ Required runtime packages from `requirements.txt`:
 
 - `customtkinter`
 - `dashscope`
-- `funasr`
 - `openai`
 - `requests`
 - `zhconv`

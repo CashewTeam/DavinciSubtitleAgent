@@ -74,8 +74,6 @@ SHORT_SUBTITLE_GAP_MS = 800
 SRT_TIME_RE = re.compile(r"^(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 ASS_OVERRIDE_RE = re.compile(r"\{\\[^}]*\}")
-PUNCT_WHITESPACE = set("，。！？；：\n\r \t\u201c\u201d\u2018\u2019")
-ALIGN_SPLIT_CHARS = set("，。！？；：\n\r")
 
 
 def load_json(path, default=None):
@@ -793,161 +791,6 @@ def _transcribe_remote(file_url, language, config, logs):
     raise RuntimeError("Remote transcription timed out")
 
 
-def _build_char_timeline(ref_text, model_text, model_timestamps):
-    model_tokens = (model_text or "").split()
-    min_len = min(len(model_tokens), len(model_timestamps))
-    ref_clean_chars = [char for char in (ref_text or "") if char not in PUNCT_WHITESPACE]
-    ref_cursor = 0
-    clean_to_tok = {}
-    for tok_idx in range(min_len):
-        token = model_tokens[tok_idx]
-        token_lower = token.lower()
-        token_len = len(token)
-        found = False
-        search_end = len(ref_clean_chars) - token_len + 1
-        for start in range(ref_cursor, max(ref_cursor, search_end)):
-            if start >= search_end:
-                break
-            if "".join(ref_clean_chars[start : start + token_len]).lower() == token_lower:
-                for offset in range(token_len):
-                    clean_to_tok[start + offset] = tok_idx
-                ref_cursor = start + token_len
-                found = True
-                break
-        if not found and ref_cursor < len(ref_clean_chars):
-            clean_to_tok[ref_cursor] = tok_idx
-            ref_cursor += 1
-
-    char_timeline = []
-    clean_pos = 0
-    for ref_char in ref_text:
-        if ref_char in PUNCT_WHITESPACE:
-            if char_timeline:
-                char_timeline.append((ref_char, char_timeline[-1][1], char_timeline[-1][2]))
-            else:
-                char_timeline.append((ref_char, 0, 0))
-            continue
-        tok_idx = clean_to_tok.get(clean_pos)
-        if tok_idx is not None and tok_idx < len(model_timestamps):
-            start_ms, end_ms = model_timestamps[tok_idx]
-            char_timeline.append((ref_char, start_ms, end_ms))
-        elif char_timeline:
-            char_timeline.append((ref_char, char_timeline[-1][1], char_timeline[-1][2]))
-        else:
-            char_timeline.append((ref_char, 0, 0))
-        clean_pos += 1
-    return char_timeline
-
-
-def _clean_align_segment_text(text):
-    text = re.sub(r"\s+", " ", text or "").strip()
-    text = re.sub(r"([\u4e00-\u9fff\u3400-\u4dbf\uff00-\uffef])\s+([a-zA-Z0-9])", r"\1\2", text)
-    text = re.sub(r"([a-zA-Z0-9])\s+([\u4e00-\u9fff\u3400-\u4dbf\uff00-\uffef])", r"\1\2", text)
-    return text.rstrip("，。！？；：、")
-
-
-def _join_align_text(parts):
-    return _clean_align_segment_text("".join(part for part in parts if part))
-
-
-def _distribute_align_parts(parts, start_ms, end_ms):
-    cleaned = [_clean_align_segment_text(part) for part in parts]
-    cleaned = [part for part in cleaned if part]
-    if not cleaned:
-        return []
-    start_ms = int(max(0, start_ms))
-    end_ms = int(max(end_ms, start_ms + len(cleaned)))
-    total_chars = sum(max(1, len(part)) for part in cleaned)
-    duration = max(len(cleaned), end_ms - start_ms)
-    cursor = start_ms
-    distributed = []
-    for index, text in enumerate(cleaned):
-        if index == len(cleaned) - 1:
-            part_end = end_ms
-        else:
-            part_duration = max(1, int(round(duration * max(1, len(text)) / float(total_chars))))
-            part_end = min(end_ms - (len(cleaned) - index - 1), cursor + part_duration)
-        if part_end <= cursor:
-            part_end = cursor + 1
-        distributed.append((text, cursor, part_end))
-        cursor = part_end
-    return distributed
-
-
-def _spread_duplicate_time_segments(segments):
-    spread = []
-    index = 0
-    while index < len(segments):
-        text, start_ms, end_ms = segments[index]
-        group = [(text, start_ms, end_ms)]
-        index += 1
-        while index < len(segments) and segments[index][1] == start_ms and segments[index][2] == end_ms:
-            group.append(segments[index])
-            index += 1
-        if len(group) == 1:
-            spread.extend(group)
-        else:
-            spread.extend(_distribute_align_parts([item[0] for item in group], start_ms, end_ms))
-    return spread
-
-
-def _merge_untimed_align_segments(segments):
-    merged = []
-    pending = []
-    for text, start_ms, end_ms in segments:
-        if end_ms <= start_ms:
-            pending.append(text)
-            continue
-        if pending:
-            window_start = merged[-1][2] if merged else 0
-            merged.extend(_distribute_align_parts(pending + [text], window_start, end_ms))
-            pending = []
-            continue
-        merged.append((text, start_ms, end_ms))
-    if pending:
-        trailing_text = _join_align_text(pending)
-        if merged and trailing_text:
-            last_text, start_ms, end_ms = merged[-1]
-            merged[-1] = (_join_align_text([last_text, trailing_text]), start_ms, end_ms)
-        elif trailing_text:
-            raise RuntimeError("Alignment produced trailing untimed text: %s" % trailing_text[:80])
-    return _spread_duplicate_time_segments(merged)
-
-
-def _build_align_srt_segments(ref_text, result, max_chars=0):
-    if isinstance(result, list) and result:
-        item = result[0]
-    elif isinstance(result, dict):
-        item = result
-    else:
-        raise RuntimeError("Unsupported alignment result type: %s" % type(result))
-    model_text = item.get("text", "")
-    model_timestamps = item.get("timestamp", [])
-    if not model_timestamps:
-        raise RuntimeError("Alignment result did not contain timestamps")
-    char_timeline = _build_char_timeline(ref_text, model_text, model_timestamps)
-    raw_segments = []
-    buf_chars = []
-    buf_start = 0
-    for index, (char, start_ms, end_ms) in enumerate(char_timeline):
-        if not buf_chars:
-            buf_start = start_ms
-        buf_chars.append(char)
-        should_split = False
-        if char in ALIGN_SPLIT_CHARS:
-            should_split = True
-        elif max_chars > 0 and len(buf_chars) >= max_chars:
-            should_split = True
-        elif index == len(char_timeline) - 1:
-            should_split = True
-        if should_split:
-            seg_text = _clean_align_segment_text("".join(buf_chars))
-            if seg_text:
-                raw_segments.append((seg_text, buf_start, end_ms))
-            buf_chars = []
-    return _merge_untimed_align_segments(raw_segments)
-
-
 def _result_to_srt(transcription_result, max_words=0):
     import requests
 
@@ -1046,69 +889,6 @@ def run_asr(job):
         "success": True,
         "path": output_path,
         "count": len(srt_data["items"]),
-        "items": srt_data["items"],
-        "logs": logs,
-        "logs_streamed": True,
-    }
-
-
-def run_align(job):
-    config = load_agent_config()
-    logs = []
-    audio_path = os.path.abspath(job["audio"])
-    output_path = os.path.abspath(job["output"])
-    reference_text = (job.get("text") or "").strip()
-    if not reference_text and job.get("text_path"):
-        with open(os.path.abspath(job["text_path"]), "r", encoding="utf-8") as handle:
-            reference_text = handle.read().strip()
-    if not reference_text:
-        raise RuntimeError("Reference text is required for forced alignment")
-    if not os.path.isfile(audio_path):
-        raise RuntimeError("Audio file does not exist: %s" % audio_path)
-
-    model_name = (job.get("model") or config.get("align_model") or "fa-zh").strip()
-    device = (job.get("device") or config.get("align_device") or "cpu").strip()
-    cache_dir = os.path.expanduser((job.get("cache_dir") or config.get("cache_dir") or "").strip()) if (job.get("cache_dir") or config.get("cache_dir")) else ""
-    max_chars = int(job.get("max_chars", config.get("default_max_chars", 24)) or 0)
-
-    if cache_dir:
-        os.environ["MODELSCOPE_CACHE"] = cache_dir
-        ensure_dir(cache_dir)
-        _worker_log(logs, "Using alignment cache dir: %s" % cache_dir)
-
-    _worker_log(logs, "Running forced alignment (Beta)")
-    _worker_log(logs, "Loading FunASR alignment model: %s (%s)" % (model_name, device))
-    try:
-        from funasr import AutoModel
-    except ImportError:
-        raise RuntimeError("funasr is not installed. Install it in the worker environment to use forced alignment")
-
-    try:
-        model = AutoModel(model=model_name, device=device, disable_update=True)
-    except TypeError:
-        model = AutoModel(model=model_name, device=device)
-    _worker_log(logs, "FunASR alignment model loaded")
-    result = model.generate(input=audio_path, text=reference_text)
-    segments = _build_align_srt_segments(reference_text, result, max_chars=max_chars)
-    entries = []
-    for index, (text, start_ms, end_ms) in enumerate(segments, 1):
-        if end_ms <= start_ms:
-            raise RuntimeError("Alignment produced invalid timestamps at segment %s: %s" % (index, text[:80]))
-        entries.append(
-            {
-                "index": index,
-                "start": _ms_to_srt(start_ms),
-                "end": _ms_to_srt(end_ms),
-                "text": text,
-            }
-        )
-    _write_srt_entries(output_path, entries)
-    srt_data = read_srt_file(output_path)
-    _worker_log(logs, "Forced alignment completed: %s subtitles" % srt_data["count"])
-    return {
-        "success": True,
-        "path": output_path,
-        "count": srt_data["count"],
         "items": srt_data["items"],
         "logs": logs,
         "logs_streamed": True,
@@ -1613,8 +1393,6 @@ def run_worker_job(job):
         return run_export_audio(job)
     if action == "asr":
         return run_asr(job)
-    if action == "align":
-        return run_align(job)
     if action == "read_srt":
         return run_read_srt(job)
     if action == "convert_srt":

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import json
 import os
 import subprocess
 import sys
@@ -10,28 +9,7 @@ APP_NAME = "Subtitle Agent"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/SubtitleAgent")
 CONFIG_PATH = os.path.join(APP_SUPPORT_DIR, "subtitle_agent_config.json")
-LEGACY_CONFIG_PATH = os.path.join(SCRIPT_DIR, "subtitle_agent", "subtitle_agent_config.json")
 APP_SCRIPT_PATH = os.path.join(SCRIPT_DIR, "subtitle_agent_app.py")
-
-
-def _load_config():
-    for path in (CONFIG_PATH, LEGACY_CONFIG_PATH):
-        if os.path.isfile(path):
-            try:
-                with open(path, "r", encoding="utf-8") as handle:
-                    return json.load(handle)
-            except Exception:
-                pass
-    return {}
-
-
-def _python_executable():
-    config = _load_config()
-    path = os.path.expanduser(config.get("python_path", "")).strip()
-    if path:
-        return path
-    return sys.executable or "python3"
-
 
 def _app_bundle_candidates():
     return [
@@ -48,7 +26,7 @@ def _launch_app_bundle(path):
 def _launch_source_app():
     env = os.environ.copy()
     env["SUBTITLE_AGENT_CONFIG_PATH"] = CONFIG_PATH
-    subprocess.Popen([_python_executable(), APP_SCRIPT_PATH], cwd=SCRIPT_DIR, env=env)
+    subprocess.Popen([sys.executable or "python3", APP_SCRIPT_PATH], cwd=SCRIPT_DIR, env=env)
 
 
 def main():

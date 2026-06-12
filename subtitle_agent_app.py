@@ -113,7 +113,6 @@ core = load_core_module()
 
 
 DEFAULT_CONFIG = {
-    "python_path": "",
     "output_dir_mode": "custom",
     "custom_output_dir": compact_user_path(DEFAULT_OUTPUT_DIR),
     "dashscope_api_key": "",
@@ -122,8 +121,6 @@ DEFAULT_CONFIG = {
     "default_max_words": 24,
     "default_max_chars": 24,
     "default_chars_per_line": 24,
-    "align_model": "fa-zh",
-    "align_device": "cpu",
     "recognition_mode": "asr_remote",
     "target_lang": "zh-cn",
     "llm_model": "deepseek-v4-flash",
@@ -132,12 +129,10 @@ DEFAULT_CONFIG = {
     "llm_proofread_prompt": core.DEFAULT_PROOFREAD_PROMPT,
     "llm_translate_prompt": core.DEFAULT_TRANSLATE_PROMPT,
     "llm_optimize_prompt": core.DEFAULT_OPTIMIZE_PROMPT,
-    "cache_dir": compact_user_path(DEFAULT_OUTPUT_DIR),
 }
 
 MODE_SPECS = [
     ("asr_remote", "远程 ASR（云端识别）", "asr_remote"),
-    ("align", "强制对齐（Beta，需要参考文案）", "align"),
     ("resolve_builtin", "Resolve 原生识别（当前时间线）", "resolve_builtin"),
 ]
 MODE_LABEL_TO_KEY = dict((label, key) for key, label, _ in MODE_SPECS)
@@ -169,10 +164,10 @@ def load_config():
         config = json.load(handle)
     merged = dict(DEFAULT_CONFIG)
     merged.update(config)
-    for key in ("python_path", "custom_output_dir", "cache_dir"):
+    for key in ("custom_output_dir",):
         if merged.get(key):
             merged[key] = expand_user_path(merged[key])
-    for removed in ("local_model_name", "local_device", "local_model_dir", "model_dir", "corrections_path", "corrections_json"):
+    for removed in ("python_path", "local_model_name", "local_device", "local_model_dir", "model_dir", "corrections_path", "corrections_json", "align_model", "align_device", "cache_dir"):
         merged.pop(removed, None)
     return merged
 
@@ -181,9 +176,9 @@ def save_config(config):
     ensure_app_support_dir()
     persisted = dict(DEFAULT_CONFIG)
     persisted.update(config)
-    for removed in ("local_model_name", "local_device", "local_model_dir", "model_dir", "corrections_path", "corrections_json"):
+    for removed in ("python_path", "local_model_name", "local_device", "local_model_dir", "model_dir", "corrections_path", "corrections_json", "align_model", "align_device", "cache_dir"):
         persisted.pop(removed, None)
-    for key in ("python_path", "custom_output_dir", "cache_dir"):
+    for key in ("custom_output_dir",):
         persisted[key] = compact_user_path(persisted.get(key))
     with open(CONFIG_PATH, "w", encoding="utf-8") as handle:
         json.dump(persisted, handle, ensure_ascii=False, indent=2)
@@ -390,8 +385,6 @@ class SettingsDialog(BaseToplevel):
             row += 1
 
         add_entry("输出目录", "custom_output_dir")
-        add_entry("外部 Python", "python_path")
-        add_entry("缓存目录", "cache_dir")
         add_combo("默认语言", "default_lang", ["zh", "en", "yue", "ja", "ko"])
         add_combo("目标语言", "target_lang", ["zh-cn", "zh-tw", "zh-hk", "en", "ja", "ko"])
         add_entry("DashScope API Key", "dashscope_api_key", show="*")
@@ -402,8 +395,6 @@ class SettingsDialog(BaseToplevel):
         add_entry("max_words", "default_max_words")
         add_entry("max_chars", "default_max_chars")
         add_entry("chars_per_line", "default_chars_per_line")
-        add_entry("align_model", "align_model")
-        add_entry("align_device", "align_device")
         add_text("校对提示词", "llm_proofread_prompt")
         add_text("翻译提示词（可使用 {target_lang}）", "llm_translate_prompt")
         add_text("文案优化提示词", "llm_optimize_prompt")
@@ -678,11 +669,6 @@ class SubtitleAgentApp:
         header.configure(text=text, text_color="#d9b44a" if warning else None)
 
     def _worker_python(self):
-        if getattr(sys, "frozen", False):
-            return sys.executable
-        path = self.config.get("python_path", "").strip()
-        if path:
-            return os.path.abspath(os.path.expanduser(path))
         return sys.executable or "python3"
 
     def _worker_env(self):
@@ -698,8 +684,6 @@ class SubtitleAgentApp:
         env["PATH"] = os.pathsep.join(tool_paths + [env.get("PATH", "")])
         if self.config.get("dashscope_api_key"):
             env["DASHSCOPE_API_KEY"] = self.config["dashscope_api_key"]
-        if self.config.get("cache_dir"):
-            env["MODELSCOPE_CACHE"] = os.path.abspath(os.path.expanduser(self.config["cache_dir"]))
         return env
 
     def _worker_cmd(self, job_path):
@@ -1039,34 +1023,19 @@ class SubtitleAgentApp:
                 self.log("Audio ready at %s" % audio_path)
             self.state["audio_path"] = audio_path
 
-            if mode == "align":
-                reference_text = self.reference_text_content(required=True)
-                payload = self.run_worker(
-                    {
-                        "action": "align",
-                        "audio": audio_path,
-                        "output": raw_srt_path,
-                        "text": reference_text,
-                        "max_chars": int(self.config.get("default_max_chars", 24)),
-                        "model": self.config.get("align_model", "fa-zh"),
-                        "device": self.config.get("align_device", "cpu"),
-                        "cache_dir": self.config.get("cache_dir", ""),
-                    }
-                )
-            else:
-                if not self.config.get("dashscope_api_key"):
-                    raise RuntimeError("Please configure DashScope API Key first")
-                payload = self.run_worker(
-                    {
-                        "action": "asr",
-                        "audio": audio_path,
-                        "output": raw_srt_path,
-                        "lang": self.config.get("default_lang", "zh"),
-                        "max_words": int(self.config.get("default_max_words", 24)),
-                        "dashscope_api_key": self.config.get("dashscope_api_key", ""),
-                        "region": self.config.get("region", "cn"),
-                    }
-                )
+            if not self.config.get("dashscope_api_key"):
+                raise RuntimeError("Please configure DashScope API Key first")
+            payload = self.run_worker(
+                {
+                    "action": "asr",
+                    "audio": audio_path,
+                    "output": raw_srt_path,
+                    "lang": self.config.get("default_lang", "zh"),
+                    "max_words": int(self.config.get("default_max_words", 24)),
+                    "dashscope_api_key": self.config.get("dashscope_api_key", ""),
+                    "region": self.config.get("region", "cn"),
+                }
+            )
             self.update_srt_state("raw_srt", payload)
             self.state["final_srt"] = payload["path"]
             self.log("Raw SRT generated: %s (%s items)" % (payload["path"], payload["count"]))
@@ -1225,23 +1194,6 @@ def _cli_asr(args, config):
     print("OK: %s segments -> %s" % (result["count"], args.output))
 
 
-def _cli_align(args, config):
-    with open(args.text, "r", encoding="utf-8-sig") as handle:
-        reference_text = handle.read().strip()
-    job = {
-        "action": "align",
-        "audio": os.path.abspath(args.input),
-        "output": os.path.abspath(args.output),
-        "text": reference_text,
-        "model": config.get("align_model", "fa-zh"),
-        "device": config.get("align_device", "cpu"),
-        "max_chars": int(config.get("default_max_chars", 24)),
-        "cache_dir": config.get("cache_dir", ""),
-    }
-    result = core.run_align(job)
-    print("OK: %s segments -> %s" % (result["count"], args.output))
-
-
 def _cli_proofread(args, config):
     api_key = args.api_key or config.get("dashscope_api_key") or os.environ.get("DASHSCOPE_API_KEY", "")
     if not api_key:
@@ -1335,11 +1287,6 @@ def build_parser():
     p.add_argument("--lang", default="zh")
     p.add_argument("--api-key")
 
-    p = sub.add_parser("align", help="Forced alignment on audio + transcript")
-    p.add_argument("input")
-    p.add_argument("text")
-    p.add_argument("output")
-
     p = sub.add_parser("proofread", help="Proofread SRT with LLM")
     p.add_argument("input")
     p.add_argument("output")
@@ -1378,8 +1325,6 @@ def main():
         config = load_config()
         if args.command == "asr":
             _cli_asr(args, config)
-        elif args.command == "align":
-            _cli_align(args, config)
         elif args.command == "proofread":
             _cli_proofread(args, config)
         elif args.command == "translate":

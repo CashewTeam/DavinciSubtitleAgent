@@ -3,10 +3,14 @@
 from PyInstaller.utils.hooks import collect_submodules
 
 
-hiddenimports = []
+hiddenimports = [
+    "dashscope",
+    "dashscope.files",
+    "dashscope.audio",
+    "dashscope.audio.asr",
+    "dashscope.audio.asr.transcription",
+]
 hiddenimports += collect_submodules("customtkinter")
-hiddenimports += collect_submodules("dashscope")
-hiddenimports += collect_submodules("funasr")
 hiddenimports += collect_submodules("openai")
 
 datas = [
@@ -31,19 +35,28 @@ pyz = PYZ(analysis.pure)
 exe = EXE(
     pyz,
     analysis.scripts,
-    analysis.binaries,
-    analysis.datas,
     [],
     name="Subtitle Agent",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
+    exclude_binaries=True,
     console=False,
 )
 
-app = BUNDLE(
+coll = COLLECT(
     exe,
+    analysis.binaries,
+    analysis.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="Subtitle Agent",
+)
+
+app = BUNDLE(
+    coll,
     name="Subtitle Agent.app",
     icon=None,
     bundle_identifier="com.cashewteam.subtitleagent",
