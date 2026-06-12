@@ -67,7 +67,10 @@ python3 subtitle_agent_standalone.py
 先安装依赖：
 
 ```bash
-pip3 install -r requirements.txt
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip setuptools wheel
+pip install -r requirements.txt
 ```
 
 再执行：
@@ -127,17 +130,16 @@ ffprobe -version
 ### 3. 安装依赖
 
 ```bash
-pip3 install -r requirements.txt
-```
-
-如果希望使用独立虚拟环境：
-
-```bash
-mkdir -p ~/Documents/asr
-python3 -m venv ~/Documents/asr/venv
-source ~/Documents/asr/venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
+```
+
+如果项目里已经有 `venv`，直接激活即可：
+
+```bash
+source venv/bin/activate
 ```
 
 ### 4. 配置 API Key

@@ -41,9 +41,8 @@ ffprobe -version
 ## 3. Create a virtual environment
 
 ```bash
-mkdir -p ~/Documents/asr
-python3 -m venv ~/Documents/asr/venv
-source ~/Documents/asr/venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
