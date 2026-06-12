@@ -12,10 +12,10 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules("customtkinter")
 hiddenimports += collect_submodules("openai")
+hiddenimports += collect_submodules("subtitle_agent_app")
 
 datas = [
-    ("subtitle_agent/subtitle_agent_core.tool", "subtitle_agent"),
-    ("subtitle_agent/subagent.png", "subtitle_agent"),
+    ("subagent.png", "."),
 ]
 
 analysis = Analysis(

@@ -1,6 +1,6 @@
 # Subtitle Agent for DaVinci Resolve
 
-![Subtitle Agent UI](subtitle_agent/subagent.png)
+![Subtitle Agent UI](subagent.png)
 
 Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主界面使用 CustomTkinter，支持双击 `.app` 打开；DaVinci Resolve 侧只保留一个极薄的 `Workspace -> Scripts -> SubtitleAgent` 桥接脚本，用于拉起主 app。
 
@@ -20,11 +20,24 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 
 ```text
 SubtitleAgent.py              # Resolve 菜单桥接启动器
-subtitle_agent_app.py         # macOS app 主入口（GUI + CLI + bundled worker）
-subtitle_agent_standalone.py  # 兼容入口，转发到 subtitle_agent_app.py
+subtitle_agent_app.py         # macOS app 兼容入口（GUI + CLI + bundled worker）
+subtitle_agent_app/           # 主 app package
+  main.py                     # 启动、CLI 分发、主 App 组装
+  state.py                    # 运行状态初始化
+  services.py                 # 文件读取与预览文本转换
+  dialogs/result.py           # LLM 结果弹窗
+  panels/workbench.py         # 工作台页面
+  panels/editor.py            # 文案与 SRT 双栏编辑页
+  panels/settings.py          # 设置页
+  core/                       # 核心业务与 worker
+    api.py                    # 对外统一接口
+    worker.py                 # 外部 worker 入口
+    resolve_ops.py            # Resolve 相关操作
+    srt_ops.py                # SRT 解析/转换
+    asr_ops.py                # 远程 ASR
+    llm_ops.py                # LLM 校对/翻译/文案优化
+subagent.png                  # UI 截图
 subtitle_agent/
-  subtitle_agent_core.tool    # 共享核心与 worker
-  subagent.png                # UI 截图
 README.md
 AGENT_ENV_SETUP.md
 requirements.txt
@@ -54,12 +67,6 @@ app 与 worker 统一使用这个配置文件：
 
 ```bash
 python3 subtitle_agent_app.py
-```
-
-兼容旧命令：
-
-```bash
-python3 subtitle_agent_standalone.py
 ```
 
 ### 2. 作为 macOS app 打包
@@ -232,8 +239,7 @@ which ffprobe
 ```bash
 python3 -m py_compile SubtitleAgent.py
 python3 -m py_compile subtitle_agent_app.py
-python3 -m py_compile subtitle_agent_standalone.py
-python3 -m py_compile subtitle_agent/subtitle_agent_core.tool
+python3 -m py_compile subtitle_agent_app/core/*.py
 ```
 
 更多环境手动配置说明见 [AGENT_ENV_SETUP.md](AGENT_ENV_SETUP.md)。
