@@ -1,0 +1,7 @@
+customtkinter
+dashscope
+funasr
+openai
+pyinstaller
+requests
+zhconv

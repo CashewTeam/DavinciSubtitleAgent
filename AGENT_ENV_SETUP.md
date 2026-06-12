@@ -1,18 +1,22 @@
 # Environment Setup for Subtitle Agent
 
-This guide walks through manually setting up Subtitle Agent's runtime environment on macOS without using a pre-packaged environment bundle.
+This guide explains how to prepare a macOS environment for Subtitle Agent **without** using a prebuilt app bundle.
 
 Scope:
+
 - macOS
-- DaVinci Resolve with scripts already placed in the correct directory
+- Subtitle Agent source checkout
+- DaVinci Resolve installed locally
 
 ## 1. Install Python from python.org
 
-Do NOT use Homebrew Python as the external worker environment.
+Do not use Homebrew Python as the primary worker environment.
 
-Download from: [https://www.python.org/downloads/](https://www.python.org/downloads/)
+Download from:
 
-Recommended version: Python 3.11 or 3.12.
+[https://www.python.org/downloads/](https://www.python.org/downloads/)
+
+Recommended: Python 3.11 or 3.12.
 
 Verify:
 
@@ -34,34 +38,44 @@ ffmpeg -version
 ffprobe -version
 ```
 
-## 3. Create virtual environment and install dependencies
+## 3. Create a virtual environment
 
 ```bash
-mkdir -p ~/Documents/subtitle_agent
-python3 -m venv ~/Documents/subtitle_agent/venv
-source ~/Documents/subtitle_agent/venv/bin/activate
+mkdir -p ~/Documents/asr
+python3 -m venv ~/Documents/asr/venv
+source ~/Documents/asr/venv/bin/activate
 pip install --upgrade pip setuptools wheel
-pip install openai dashscope
+pip install -r requirements.txt
 ```
+
+This installs the source-mode dependencies used by:
+
+- CustomTkinter GUI
+- DashScope remote ASR
+- FunASR forced alignment
+- OpenAI-compatible LLM proofreading / translation / text optimization
+- PyInstaller packaging
 
 ## 4. Configure Subtitle Agent
 
-The config file is generated on first run at:
+The app stores runtime configuration at:
 
 ```text
-/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/subtitle_agent/subtitle_agent_config.json
+~/Library/Application Support/SubtitleAgent/subtitle_agent_config.json
 ```
 
-Key fields:
+Minimum recommended fields:
 
 ```json
 {
-  "python_path": "~/Documents/subtitle_agent/venv/bin/python",
+  "python_path": "~/Documents/asr/venv/bin/python",
+  "custom_output_dir": "~/Documents/asr",
+  "cache_dir": "~/Documents/asr",
   "dashscope_api_key": "your-dashscope-api-key"
 }
 ```
 
-For LLM features (proofreading / translation / text optimization):
+LLM defaults:
 
 ```json
 {
@@ -70,19 +84,73 @@ For LLM features (proofreading / translation / text optimization):
 }
 ```
 
-## 5. Verify
+Forced alignment defaults:
 
-1. `Workspace -> Scripts -> SubtitleAgent` opens the UI.
-2. Go to Settings and confirm `python_path` is set correctly.
-3. Test with `远程 ASR` or `Resolve 内置字幕生成`.
-
-## Dependencies
-
-Only two Python packages are needed:
-
-```
-openai       — LLM proofreading / translation
-dashscope    — cloud ASR via Alibaba Cloud DashScope
+```json
+{
+  "align_model": "fa-zh",
+  "align_device": "cpu"
+}
 ```
 
-No FunASR, no PyTorch, no forced alignment models.
+## 5. Verify source mode
+
+Run the app:
+
+```bash
+python3 subtitle_agent_app.py
+```
+
+Check the following:
+
+1. The app opens normally.
+2. Settings can be saved.
+3. `远程 ASR` works after filling API key.
+4. `强制对齐（Beta）` works after providing WAV + reference text.
+5. `Resolve 原生识别` works when Resolve is running and scripting is available.
+
+## 6. Verify Resolve bridge
+
+Place the repo in:
+
+```text
+/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/
+```
+
+Then restart Resolve and click:
+
+```text
+Workspace -> Scripts -> SubtitleAgent
+```
+
+Expected behavior:
+
+- If `dist/Subtitle Agent.app` exists, Resolve launches that app.
+- Otherwise Resolve launches `subtitle_agent_app.py`.
+
+## 7. Build the macOS app
+
+```bash
+./build_macos_app.sh
+```
+
+Expected output:
+
+```text
+dist/Subtitle Agent.app
+```
+
+## Dependency summary
+
+Required runtime packages from `requirements.txt`:
+
+- `customtkinter`
+- `dashscope`
+- `funasr`
+- `openai`
+- `requests`
+- `zhconv`
+
+Build-time package:
+
+- `pyinstaller`

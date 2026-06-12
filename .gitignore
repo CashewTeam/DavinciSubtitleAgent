@@ -22,3 +22,6 @@ asr/
 venv/
 models/
 .alma-snapshots
+build/
+dist/
+*.app
