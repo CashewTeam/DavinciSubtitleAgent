@@ -16,6 +16,46 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 - 使用 OpenAI 兼容接口接入 DashScope / DeepSeek 做 SRT 校对、翻译、参考文案优化。
 - 在结果窗口中手动编辑 LLM 输出，再决定是否应用到主页。
 
+## 快速开始
+
+### 1. 安装 ffmpeg
+
+```bash
+brew install ffmpeg
+```
+
+确认可用：
+
+```bash
+ffmpeg -version
+ffprobe -version
+```
+
+### 2. 一键启动 app
+
+如果你已经有打包好的 app，直接双击启动即可：
+
+
+### 3. 配置阿里云
+
+远程 ASR 与 LLM 功能需要 DashScope API Key。
+
+首次启动后在设置页填写：
+
+- `DashScope API Key`
+- `llm_model`
+- `llm_base_url`
+
+## 当前识别模式
+
+主 app 只保留两种识别模式：
+
+- `远程 ASR（云端识别）`
+- `Resolve 原生识别（当前时间线）`
+
+本地 ASR 与强制对齐已从 UI 和主流程中移除。
+
+
 ## 项目结构
 
 ```text
@@ -62,86 +102,25 @@ app 与 worker 统一使用这个配置文件：
 
 首次启动 app 时会自动迁移。
 
-## 安装与运行
 
-### 1. 作为源码运行
 
-```bash
-python3 subtitle_agent_app.py
-```
+## 开发者
 
-或者直接一键调试启动 UI：
+### 调试启动 UI
 
 ```bash
 ./run_ui_debug.sh
 ```
 
-### 2. 作为 macOS app 打包
+### 源码运行
+
+```bash
+python3 subtitle_agent_app.py
+```
+
+### 打包
 
 先安装依赖：
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-```
-
-再执行：
-
-```bash
-./build_macos_app.sh
-```
-
-产物默认位于：
-
-```text
-dist/Subtitle Agent.app
-```
-
-### 3. 作为 Resolve 桥接脚本
-
-把本项目放到 Resolve 的 Utility 目录：
-
-```text
-/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/
-```
-
-重启 Resolve 后，在：
-
-```text
-Workspace -> Scripts -> SubtitleAgent
-```
-
-点击后会：
-
-1. 优先启动同目录或 `dist/` 下的 `Subtitle Agent.app`
-2. 如果未找到 app bundle，则回退到源码入口 `subtitle_agent_app.py`
-
-## 首次使用准备
-
-### 1. 安装 Python
-
-请到 Python 官网下载 macOS installer：
-
-[https://www.python.org/downloads/](https://www.python.org/downloads/)
-
-不建议使用 Homebrew Python 作为外部 worker 环境。
-
-### 2. 安装 ffmpeg
-
-```bash
-brew install ffmpeg
-```
-
-确认可用：
-
-```bash
-ffmpeg -version
-ffprobe -version
-```
-
-### 3. 安装依赖
 
 ```bash
 python3 -m venv venv
@@ -156,46 +135,47 @@ pip install -r requirements.txt
 source venv/bin/activate
 ```
 
-### 4. 配置 API Key
+然后执行：
 
-远程 ASR 与 LLM 功能需要 DashScope API Key。
+```bash
+./build_macos_app.sh
+```
 
-首次启动后在设置页填写：
+产物默认位于：
 
-- `DashScope API Key`
-- `llm_model`
-- `llm_base_url`
+```text
+dist/Subtitle Agent.app
+```
 
-## 当前识别模式
-
-主 app 只保留两种识别模式：
-
-- `远程 ASR（云端识别）`
-- `Resolve 原生识别（当前时间线）`
-
-本地 ASR 与强制对齐已从 UI 和主流程中移除。
-
-## CLI
+### CLI
 
 主入口同时支持命令行：
 
 ```bash
+APP_BIN="/Applications/Subtitle Agent.app/Contents/MacOS/Subtitle Agent"
+
 # 远程 ASR
-python3 subtitle_agent_app.py asr audio.wav subtitles.srt
+"$APP_BIN" asr audio.wav subtitles.srt
 
 # 校对 SRT
-python3 subtitle_agent_app.py proofread input.srt output.srt
+"$APP_BIN" proofread input.srt output.srt
 
 # 翻译 SRT
-python3 subtitle_agent_app.py translate input.srt output.srt --target en
+"$APP_BIN" translate input.srt output.srt --target en
 
 # 优化参考文案
-python3 subtitle_agent_app.py optimize input.txt output.txt
+"$APP_BIN" optimize input.txt output.txt
 
 # 简繁转换
-python3 subtitle_agent_app.py convert input.srt output.srt --lang zh-tw
+"$APP_BIN" convert input.srt output.srt --lang zh-tw
 
 # 查看 SRT
+"$APP_BIN" read subtitles.srt
+```
+
+如果是源码模式调试，也可以继续使用：
+
+```bash
 python3 subtitle_agent_app.py read subtitles.srt
 ```
 
@@ -209,6 +189,16 @@ Project_subtitles_resolve_builtin_raw.srt
 Project_subtitles_zh_cn.srt
 Project_reference_optimized.txt
 ```
+
+### 开发验证
+
+```bash
+python3 -m py_compile SubtitleAgent.py
+python3 -m py_compile subtitle_agent_app.py
+python3 -m py_compile subtitle_agent_app/core/*.py
+```
+
+更多环境手动配置说明见 [AGENT_ENV_SETUP.md](/Users/con11/Documents/GitHub/DavinciSubtitleAgent/AGENT_ENV_SETUP.md)。
 
 ## 常见问题
 
@@ -240,13 +230,3 @@ which ffprobe
 ```
 
 不要再把运行配置写回源码目录下的 `subtitle_agent/` 子目录。
-
-## 开发验证
-
-```bash
-python3 -m py_compile SubtitleAgent.py
-python3 -m py_compile subtitle_agent_app.py
-python3 -m py_compile subtitle_agent_app/core/*.py
-```
-
-更多环境手动配置说明见 [AGENT_ENV_SETUP.md](AGENT_ENV_SETUP.md)。
