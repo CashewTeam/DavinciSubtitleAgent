@@ -43,6 +43,7 @@ AGENT_ENV_SETUP.md
 requirements.txt
 SubtitleAgent.spec
 build_macos_app.sh
+run_ui_debug.sh
 ```
 
 ## 配置文件位置
@@ -67,6 +68,12 @@ app 与 worker 统一使用这个配置文件：
 
 ```bash
 python3 subtitle_agent_app.py
+```
+
+或者直接一键调试启动 UI：
+
+```bash
+./run_ui_debug.sh
 ```
 
 ### 2. 作为 macOS app 打包

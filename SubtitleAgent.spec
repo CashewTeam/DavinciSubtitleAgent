@@ -60,4 +60,8 @@ app = BUNDLE(
     name="Subtitle Agent.app",
     icon=None,
     bundle_identifier="com.cashewteam.subtitleagent",
+    info_plist={
+        "CFBundleShortVersionString": "2.0.0",
+        "CFBundleVersion": "2.0.0",
+    },
 )

@@ -28,7 +28,7 @@ except ImportError:
 
 
 APP_NAME = "Subtitle Agent"
-APP_VERSION = "2026-06-13.1"
+APP_VERSION = "2.0.0"
 APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/SubtitleAgent")
 DEFAULT_OUTPUT_DIR = os.path.expanduser("~/Documents/asr")
 
@@ -277,6 +277,7 @@ class SubtitleAgentApp:
 
         self.status_header = ctk.CTkLabel(frame, textvariable=self.status_title_var, anchor="w", font=ctk.CTkFont(size=16, weight="bold"))
         self.status_header.grid(row=0, column=0, columnspan=8, sticky="ew", padx=12, pady=(10, 6))
+        self.status_header_default_text_color = self.status_header.cget("text_color")
 
         self._grid_label_entry(frame, 0, "Resolve", self.resolve_var)
         self._grid_label_entry(frame, 2, "Project", self.project_var)
@@ -394,7 +395,7 @@ class SubtitleAgentApp:
 
     def _set_status_header(self, text, warning=False):
         self.status_title_var.set(text)
-        self.status_header.configure(text_color="#d9b44a" if warning else None)
+        self.status_header.configure(text_color="#d9b44a" if warning else self.status_header_default_text_color)
 
     def _worker_python(self):
         return sys.executable or "python3"

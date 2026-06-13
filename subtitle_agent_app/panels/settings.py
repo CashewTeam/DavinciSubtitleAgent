@@ -14,17 +14,17 @@ class SettingsPanel:
         tabs = ctk.CTkTabview(self.frame)
         tabs.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
         self.tabs = tabs
-        for name in ("输出", "识别", "LLM", "提示词"):
+        for name in ("识别", "LLM", "提示词"):
             tabs.add(name)
             tabs.tab(name).grid_columnconfigure(1, weight=1)
 
-        self._add_entry(tabs.tab("输出"), 0, "输出目录", "custom_output_dir")
-        self._add_combo(tabs.tab("识别"), 0, "默认语言", "default_lang", ["zh", "en", "yue", "ja", "ko"])
-        self._add_combo(tabs.tab("识别"), 1, "目标语言", "target_lang", ["zh-cn", "zh-tw", "zh-hk", "en", "ja", "ko"])
-        self._add_combo(tabs.tab("识别"), 2, "region", "region", ["cn", "intl"])
-        self._add_entry(tabs.tab("识别"), 3, "max_words", "default_max_words")
-        self._add_entry(tabs.tab("识别"), 4, "max_chars", "default_max_chars")
-        self._add_entry(tabs.tab("识别"), 5, "chars_per_line", "default_chars_per_line")
+        self._add_entry(tabs.tab("识别"), 0, "输出目录", "custom_output_dir")
+        self._add_combo(tabs.tab("识别"), 1, "默认语言", "default_lang", ["zh", "en", "yue", "ja", "ko"])
+        self._add_combo(tabs.tab("识别"), 2, "目标语言", "target_lang", ["zh-cn", "zh-tw", "zh-hk", "en", "ja", "ko"])
+        self._add_combo(tabs.tab("识别"), 3, "region", "region", ["cn", "intl"])
+        self._add_entry(tabs.tab("识别"), 4, "max_words", "default_max_words")
+        self._add_entry(tabs.tab("识别"), 5, "max_chars", "default_max_chars")
+        self._add_entry(tabs.tab("识别"), 6, "chars_per_line", "default_chars_per_line")
         self._add_entry(tabs.tab("LLM"), 0, "DashScope API Key", "dashscope_api_key", show="*")
         self._add_entry(tabs.tab("LLM"), 1, "llm_model", "llm_model")
         self._add_entry(tabs.tab("LLM"), 2, "llm_base_url", "llm_base_url")
