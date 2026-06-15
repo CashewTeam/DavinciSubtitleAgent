@@ -21,6 +21,16 @@ MODEL_BASE_URLS = (
 )
 
 
+def brew_exe():
+    found = shutil.which("brew")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise RuntimeError("Homebrew not found. Install Homebrew first, then rerun initialization.")
+
+
 def _model_target_dir():
     return os.path.join(os.path.expanduser(APP_SUPPORT_DIR), "models", MODEL_DIR_NAME)
 
@@ -32,7 +42,13 @@ def _is_valid_omnilingual_dir(path):
 
 def inspect_init_status(config=None):
     config = config or {}
-    brew_path = shutil.which("brew")
+    brew_path = ""
+    brew_ready = False
+    try:
+        brew_path = brew_exe()
+        brew_ready = True
+    except Exception:
+        brew_path = ""
     ffmpeg_path = ""
     ffmpeg_ready = False
     ffmpeg_error = ""
@@ -49,8 +65,8 @@ def inspect_init_status(config=None):
 
     return {
         "success": True,
-        "brew_ready": bool(brew_path),
-        "brew_path": brew_path or "",
+        "brew_ready": brew_ready,
+        "brew_path": brew_path,
         "ffmpeg_ready": ffmpeg_ready,
         "ffmpeg_path": ffmpeg_path,
         "ffmpeg_error": ffmpeg_error,
@@ -71,9 +87,7 @@ def install_ffmpeg(log_callback=None):
         else:
             worker_log(logs, message)
 
-    brew_path = shutil.which("brew")
-    if not brew_path:
-        raise RuntimeError("Homebrew not found. Install Homebrew first, then rerun initialization.")
+    brew_path = brew_exe()
     try:
         current = ffmpeg_exe()
         return {"success": True, "installed": False, "ffmpeg_path": current, "logs": logs}

@@ -29,7 +29,7 @@ except ImportError:
 
 
 APP_NAME = "Subtitle Agent"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.1.1"
 APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/SubtitleAgent")
 DEFAULT_OUTPUT_DIR = os.path.expanduser("~/Documents/asr")
 

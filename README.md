@@ -2,7 +2,7 @@
 
 ![Subtitle Agent UI](subagent.png)
 
-Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主界面使用 CustomTkinter，支持双击 `.app` 打开；DaVinci Resolve 侧只保留一个极薄的 `Workspace -> Scripts -> SubtitleAgent` 桥接脚本，用于拉起主 app。
+Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主界面使用 CustomTkinter，支持双击 `.app` 打开。
 
 目前仅面向 macOS。Windows 暂未适配。
 
@@ -25,6 +25,8 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 
 如果你已经有打包好的 app，直接双击启动即可：
 
+如果首次打开被 macOS 拦截，请先双击压缩包内附带的 `fix_quarantine.command`，再重新打开 `Subtitle Agent.app`。
+
 ### 2. 打开初始化面板
 
 启动 app 后，在首页点击 `初始化`。
@@ -40,9 +42,6 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 
 - 镜像优先：`https://hf-mirror.com/csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12`
 - 官方回退：`https://huggingface.co/csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12`
-
-
-
 
 ## 当前识别模式
 
@@ -105,9 +104,8 @@ app 与 worker 统一使用这个配置文件：
 
 首次启动 app 时会自动迁移。
 
-
-
-## 开发者
+<details>
+<summary><strong>开发者</strong></summary>
 
 ### 调试启动 UI
 
@@ -153,7 +151,7 @@ dist/Subtitle Agent.app
 默认还会额外生成一个适合 adhoc 分发的压缩包：
 
 ```text
-dist/SubtitleAgent_macOS_ARM64_2.1.0.zip
+dist/SubtitleAgent_macOS_ARM64_2.1.1.zip
 ```
 
 压缩包内包含：
@@ -262,6 +260,8 @@ python3 -m py_compile subtitle_agent_app/core/*.py
 ```
 
 更多环境手动配置说明见 [AGENT_ENV_SETUP.md](/Users/con11/Documents/GitHub/DavinciSubtitleAgent/AGENT_ENV_SETUP.md)。
+
+</details>
 
 ## 常见问题
 
