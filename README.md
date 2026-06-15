@@ -263,14 +263,6 @@ python3 -m py_compile subtitle_agent_app/core/*.py
 
 ## 常见问题
 
-### Resolve 菜单点击后没反应
-
-确认以下至少其一存在：
-
-```text
-dist/Subtitle Agent.app
-subtitle_agent_app.py
-```
 
 ### 找不到 ffmpeg
 
