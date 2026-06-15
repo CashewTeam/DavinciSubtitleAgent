@@ -150,6 +150,62 @@ source venv/bin/activate
 dist/Subtitle Agent.app
 ```
 
+默认还会额外生成一个适合 adhoc 分发的压缩包：
+
+```text
+dist/SubtitleAgent_macOS_ARM64_2.1.0.zip
+```
+
+压缩包内包含：
+
+- `Subtitle Agent.app`
+- `fix_quarantine.command`
+
+对方机器如果首次打开被系统拦截，可以先双击 `fix_quarantine.command`，它会自动执行：
+
+```bash
+xattr -dr com.apple.quarantine "Subtitle Agent.app"
+```
+
+如果要给其他 macOS 机器稳定分发，建议用 `Developer ID Application` 证书签名并做 notarization。
+
+最少需要：
+
+```bash
+export MACOS_CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+```
+
+如果你已经配置了 `notarytool` keychain profile：
+
+```bash
+export MACOS_NOTARYTOOL_PROFILE="AC_PASSWORD_PROFILE"
+./build_macos_app.sh
+```
+
+或者直接使用 Apple 凭据：
+
+```bash
+export MACOS_CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+export MACOS_NOTARY_APPLE_ID="you@example.com"
+export MACOS_NOTARY_TEAM_ID="TEAMID"
+export MACOS_NOTARY_PASSWORD="app-specific-password"
+./build_macos_app.sh
+```
+
+单独对已打包好的 app 做签名/公证也可以：
+
+```bash
+./sign_macos_app.sh "dist/Subtitle Agent.app"
+```
+
+成功后会额外生成：
+
+```text
+dist/Subtitle Agent.zip
+```
+
+这个 zip 用于 notarization 提交；完成后脚本会自动 `staple` 回 `.app`。
+
 ### CLI
 
 主入口同时支持命令行：

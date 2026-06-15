@@ -32,20 +32,19 @@ class WorkbenchPanel:
         actions.grid_columnconfigure(1, weight=1)
         actions.grid_rowconfigure(2, weight=1)
 
-        ctk.CTkLabel(actions, text="执行", anchor="w", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=8, sticky="ew", padx=12, pady=(10, 6))
+        ctk.CTkLabel(actions, text="执行", anchor="w", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=7, sticky="ew", padx=12, pady=(10, 6))
         ctk.CTkLabel(actions, text="当前模式").grid(row=1, column=0, sticky="w", padx=(12, 8), pady=(0, 10))
         self.app.mode_combo = ctk.CTkComboBox(actions, values=[label for _, label, _ in self.app.mode_specs], state="readonly", command=lambda _: self.app.on_mode_changed())
         self.app.mode_combo.grid(row=1, column=1, sticky="ew", padx=(0, 8), pady=(0, 10))
-        ctk.CTkButton(actions, text="初始化", width=90, command=self.app.on_open_init).grid(row=1, column=2, padx=(0, 8), pady=(0, 10))
-        ctk.CTkButton(actions, text="开始识别", width=110, command=self.app.on_generate).grid(row=1, column=3, padx=(0, 8), pady=(0, 10))
-        ctk.CTkButton(actions, text="导出时间线字幕", width=140, command=self.app.on_export_srt).grid(row=1, column=4, padx=(0, 8), pady=(0, 10))
-        ctk.CTkButton(actions, text="校对", width=90, command=self.app.on_convert_srt).grid(row=1, column=5, padx=(0, 8), pady=(0, 10))
-        ctk.CTkButton(actions, text="翻译", width=90, command=self.app.on_translate).grid(row=1, column=6, padx=(0, 8), pady=(0, 10))
-        ctk.CTkButton(actions, text="导入 SRT 到时间线", width=150, command=self.app.on_import_srt).grid(row=1, column=7, padx=(0, 12), pady=(0, 10))
+        ctk.CTkButton(actions, text="开始识别", width=110, command=self.app.on_generate).grid(row=1, column=2, padx=(0, 8), pady=(0, 10))
+        ctk.CTkButton(actions, text="导出时间线字幕", width=140, command=self.app.on_export_srt).grid(row=1, column=3, padx=(0, 8), pady=(0, 10))
+        ctk.CTkButton(actions, text="校对", width=90, command=self.app.on_convert_srt).grid(row=1, column=4, padx=(0, 8), pady=(0, 10))
+        ctk.CTkButton(actions, text="翻译", width=90, command=self.app.on_translate).grid(row=1, column=5, padx=(0, 8), pady=(0, 10))
+        ctk.CTkButton(actions, text="导入 SRT 到时间线", width=150, command=self.app.on_import_srt).grid(row=1, column=6, padx=(0, 12), pady=(0, 10))
 
-        ctk.CTkLabel(actions, text="日志", anchor="w").grid(row=2, column=0, columnspan=8, sticky="ew", padx=12, pady=(0, 4))
+        ctk.CTkLabel(actions, text="日志", anchor="w").grid(row=2, column=0, columnspan=7, sticky="ew", padx=12, pady=(0, 4))
         self.app.log_box = ctk.CTkTextbox(actions, wrap="word", height=260)
-        self.app.log_box.grid(row=3, column=0, columnspan=8, sticky="nsew", padx=12, pady=(0, 12))
+        self.app.log_box.grid(row=3, column=0, columnspan=7, sticky="nsew", padx=12, pady=(0, 12))
 
     def _row_with_entry(self, parent, row, label, var, buttons, extra_label=None, extra_var=None):
         ctk = self.ctk

@@ -22,4 +22,30 @@ if ! "$PYTHON_BIN" -c "import PyInstaller" >/dev/null 2>&1; then
   exit 1
 fi
 
+APP_VERSION="$("$PYTHON_BIN" - <<'PY'
+from subtitle_agent_app.main import APP_VERSION
+print(APP_VERSION)
+PY
+)"
+
 "$PYTHON_BIN" -m PyInstaller --clean --noconfirm "SubtitleAgent.spec"
+
+if [[ -n "${MACOS_CODESIGN_IDENTITY:-}" ]]; then
+  echo "Signing and notarization enabled."
+  ./sign_macos_app.sh "dist/Subtitle Agent.app"
+else
+  echo "Skipping signing: set MACOS_CODESIGN_IDENTITY to enable Developer ID signing."
+fi
+
+chmod +x "fix_quarantine.command"
+
+DIST_PACKAGE_DIR="dist/Subtitle Agent Package"
+rm -rf "$DIST_PACKAGE_DIR"
+mkdir -p "$DIST_PACKAGE_DIR"
+cp -R "dist/Subtitle Agent.app" "$DIST_PACKAGE_DIR/"
+cp "fix_quarantine.command" "$DIST_PACKAGE_DIR/"
+
+ZIP_PATH="dist/SubtitleAgent_macOS_ARM64_${APP_VERSION}.zip"
+rm -f "$ZIP_PATH"
+/usr/bin/ditto -c -k --keepParent "$DIST_PACKAGE_DIR" "$ZIP_PATH"
+echo "Adhoc distribution zip ready: $ZIP_PATH"

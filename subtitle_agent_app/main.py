@@ -29,7 +29,7 @@ except ImportError:
 
 
 APP_NAME = "Subtitle Agent"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/SubtitleAgent")
 DEFAULT_OUTPUT_DIR = os.path.expanduser("~/Documents/asr")
 
@@ -305,6 +305,7 @@ class SubtitleAgentApp:
             button = ctk.CTkButton(nav, text=label, width=120, command=lambda page=key: self.show_page(page))
             button.pack(side="left", padx=(0, 8))
             self.nav_buttons[key] = button
+        ctk.CTkButton(nav, text="初始化", width=120, command=self.on_open_init).pack(side="left", padx=(8, 0))
 
     def show_page(self, key):
         if key not in self.pages:

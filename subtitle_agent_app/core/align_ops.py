@@ -97,6 +97,23 @@ def _normalize_text_block(text):
     return text
 
 
+def _split_reference_line(line):
+    line = re.sub(r"\s+", " ", str(line or "")).strip()
+    if not line:
+        return []
+    parts = re.split(r"(?<=[，。,.？?])\s*", line)
+    segments = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        part = re.sub(r"[，。,.？?]+$", "", part).strip()
+        if not part:
+            continue
+        segments.append(part)
+    return segments
+
+
 def _text_to_segments(text):
     text = _normalize_text_block(text)
     if not text:
@@ -105,12 +122,13 @@ def _text_to_segments(text):
     segments = []
     if len(blocks) > 1:
         for block in blocks:
-            segments.append({"text": block})
+            for line in block.splitlines():
+                for part in _split_reference_line(line):
+                    segments.append({"text": part})
     else:
         for line in text.splitlines():
-            line = line.strip()
-            if line:
-                segments.append({"text": line})
+            for part in _split_reference_line(line):
+                segments.append({"text": part})
     if not segments:
         raise RuntimeError("Reference text did not produce any alignable segments")
     return segments
@@ -180,7 +198,7 @@ def run_forced_alignment(job):
     worker_log(logs, "Audio: %s" % audio_path)
     worker_log(logs, "Model: %s" % model_dir)
     worker_log(logs, "Language: %s%s" % (language, " + romanize" if romanize else ""))
-    worker_log(logs, "Reference segments: %s" % len(segments))
+    worker_log(logs, "Reference segments: %s，正在处理中，请稍后～" % len(segments))
 
     fd_input, json_input_path = tempfile.mkstemp(prefix="subtitle_agent_align_in_", suffix=".json")
     os.close(fd_input)
