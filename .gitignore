@@ -27,6 +27,7 @@ asr/
 venv/
 models/
 .alma-snapshots
+cpp-ctc-aligner-master/
 
 # Packaging/build artifacts
 build/
