@@ -60,7 +60,6 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 ## 项目结构
 
 ```text
-SubtitleAgent.py              # Resolve 菜单桥接启动器
 subtitle_agent_app.py         # macOS app 兼容入口（GUI + CLI + bundled worker）
 subtitle_agent_app/           # 主 app package
   main.py                     # 启动、CLI 分发、主 App 组装
@@ -254,7 +253,6 @@ Project_reference_optimized.txt
 ### 开发验证
 
 ```bash
-python3 -m py_compile SubtitleAgent.py
 python3 -m py_compile subtitle_agent_app.py
 python3 -m py_compile subtitle_agent_app/core/*.py
 ```
