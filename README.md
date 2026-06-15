@@ -103,9 +103,9 @@ app 与 worker 统一使用这个配置文件：
 ```
 
 首次启动 app 时会自动迁移。
-
+## 开发者
 <details>
-<summary><strong>开发者</strong></summary>
+<summary><strong>折叠内容</strong></summary>
 
 ### 调试启动 UI
 
