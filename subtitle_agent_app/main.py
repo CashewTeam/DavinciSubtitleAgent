@@ -14,6 +14,7 @@ import traceback
 from tkinter import filedialog, messagebox, simpledialog
 
 from .core import api as core
+from .dialogs.init import InitDialog
 from .dialogs.result import ResultDialog as ResultDialogWidget
 from .panels.editor import EditorPanel
 from .panels.settings import SettingsPanel
@@ -107,6 +108,11 @@ DEFAULT_CONFIG = {
     "default_max_chars": 24,
     "default_chars_per_line": 24,
     "recognition_mode": "asr_remote",
+    "align_model_dir": "",
+    "align_language": "zh-cn",
+    "align_romanize": True,
+    "align_threads": "",
+    "align_batch_size": 4,
     "target_lang": "zh-cn",
     "llm_model": "deepseek-v4-flash",
     "llm_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -118,6 +124,7 @@ DEFAULT_CONFIG = {
 
 MODE_SPECS = [
     ("asr_remote", "远程 ASR（云端识别）", "asr_remote"),
+    ("forced_alignment", "强制对齐（参考文案 + 音频）", "forced_alignment"),
     ("resolve_builtin", "Resolve 原生识别（当前时间线）", "resolve_builtin"),
 ]
 MODE_LABEL_TO_KEY = dict((label, key) for key, label, _ in MODE_SPECS)
@@ -251,6 +258,7 @@ class SubtitleAgentApp:
         self.log_box = None
         self.preview_box = None
         self.text_editor = None
+        self.init_dialog = None
 
     def _build_ui(self):
         self._build_status_bar()
@@ -556,7 +564,7 @@ class SubtitleAgentApp:
             with open(path, "r", encoding="utf-8-sig") as handle:
                 return handle.read().strip()
         if required:
-            raise RuntimeError("Reference text is required")
+            raise RuntimeError("Reference text is required. Please fill it in the 文案与字幕 page first.")
         return ""
 
     def llm_job_defaults(self):
@@ -616,8 +624,10 @@ class SubtitleAgentApp:
     def save_config_and_refresh(self, config):
         try:
             cfg = dict(config)
-            for key in ("default_max_words", "default_max_chars", "default_chars_per_line"):
+            for key in ("default_max_words", "default_max_chars", "default_chars_per_line", "align_batch_size"):
                 cfg[key] = int(cfg.get(key) or DEFAULT_CONFIG[key])
+            align_threads = str(cfg.get("align_threads", "")).strip()
+            cfg["align_threads"] = int(align_threads) if align_threads else ""
             self.config = cfg
             save_config(self.config)
             self.state["output_dir_overridden"] = False
@@ -626,6 +636,8 @@ class SubtitleAgentApp:
                 self.mode_combo.set(MODE_KEY_TO_LABEL.get(self.config.get("recognition_mode", "asr_remote"), MODE_SPECS[0][1]))
             if hasattr(self, "settings_panel"):
                 self.settings_panel.reload()
+            if self.init_dialog is not None:
+                self.init_dialog.refresh_llm_fields()
             self.log("Settings saved.")
         except Exception as exc:
             messagebox.showerror(APP_NAME, str(exc))
@@ -697,6 +709,72 @@ class SubtitleAgentApp:
 
     def on_open_settings(self):
         self.show_page("settings")
+
+    def _set_init_status(self, payload):
+        if self.init_dialog is None:
+            return
+        self.init_dialog.set_status(
+            {
+                "Homebrew": payload.get("brew_path") or ("可用" if payload.get("brew_ready") else "未安装"),
+                "ffmpeg": payload.get("ffmpeg_path") or payload.get("ffmpeg_error") or ("已就绪" if payload.get("ffmpeg_ready") else "未安装"),
+                "强制对齐模型": "已就绪" if payload.get("model_ready") else "未下载",
+                "模型目录": payload.get("model_dir") or self.config.get("align_model_dir", ""),
+            }
+        )
+
+    def _append_init_log(self, message):
+        self.log(message)
+        if self.init_dialog is not None:
+            self.init_dialog.append_log(message)
+
+    def on_open_init(self):
+        if self.init_dialog is not None:
+            try:
+                self.init_dialog.window.lift()
+                self.init_dialog.window.focus_force()
+                self.on_init_check()
+                return
+            except Exception:
+                self.init_dialog = None
+        self.init_dialog = InitDialog(ctk, self.root, self)
+        self.on_init_check()
+
+    def on_init_check(self):
+        def action():
+            payload = core.inspect_init_status(self.config)
+            self._set_init_status(payload)
+            self._append_init_log("Initialization status checked.")
+        self.run_in_thread(action)
+
+    def on_init_install_ffmpeg(self):
+        def action():
+            result = core.install_ffmpeg(log_callback=self._append_init_log)
+            self._append_init_log("ffmpeg ready: %s" % result.get("ffmpeg_path", ""))
+            self._set_init_status(core.inspect_init_status(self.config))
+        self.run_in_thread(action)
+
+    def on_init_download_model(self):
+        def action():
+            result = core.download_alignment_model(self.config, log_callback=self._append_init_log)
+            cfg = dict(self.config)
+            cfg["align_model_dir"] = result["model_dir"]
+            cfg["align_language"] = "zh-cn"
+            cfg["align_romanize"] = False
+            self.config = cfg
+            save_config(self.config)
+            self.call_ui(lambda: self.save_config_and_refresh(cfg))
+            self._append_init_log("Alignment model ready: %s" % result["model_dir"])
+            self._set_init_status(core.inspect_init_status(cfg))
+        self.run_in_thread(action)
+
+    def on_init_save_llm(self):
+        def action():
+            if self.init_dialog is None:
+                return
+            cfg = self.init_dialog.llm_values()
+            self.save_config_and_refresh(cfg)
+            self._append_init_log("LLM config saved.")
+        self.safe(action)
 
     def on_reload_srt_preview(self):
         def action():
@@ -793,6 +871,27 @@ class SubtitleAgentApp:
                 self.wav_path_var.set(audio_path)
                 self.log("Audio ready at %s" % audio_path)
             self.state["audio_path"] = audio_path
+
+            if mode == "forced_alignment":
+                reference_text = self.reference_text_content(required=True)
+                self.log("Running forced alignment")
+                payload = self.run_worker(
+                    {
+                        "action": "forced_alignment",
+                        "audio": audio_path,
+                        "output": raw_srt_path,
+                        "reference_text": reference_text,
+                        "model_dir": self.config.get("align_model_dir", ""),
+                        "language": self.config.get("align_language", DEFAULT_CONFIG["align_language"]),
+                        "romanize": bool(self.config.get("align_romanize", DEFAULT_CONFIG["align_romanize"])),
+                        "threads": self.config.get("align_threads", ""),
+                        "batch_size": int(self.config.get("align_batch_size", DEFAULT_CONFIG["align_batch_size"])),
+                    }
+                )
+                self.update_srt_state("raw_srt", payload)
+                self.state["final_srt"] = payload["path"]
+                self.log("Forced alignment SRT generated: %s (%s items)" % (payload["path"], payload["count"]))
+                return
 
             if not self.config.get("dashscope_api_key"):
                 raise RuntimeError("Please configure DashScope API Key first")
@@ -964,6 +1063,30 @@ def _cli_asr(args, config):
     print("OK: %s segments -> %s" % (result["count"], args.output))
 
 
+def _cli_align(args, config):
+    if not os.path.isfile(args.input):
+        raise RuntimeError("Audio file does not exist: %s" % os.path.abspath(args.input))
+    if not os.path.isfile(args.reference):
+        raise RuntimeError("Reference text file does not exist: %s" % os.path.abspath(args.reference))
+    with open(args.reference, "r", encoding="utf-8-sig") as handle:
+        reference_text = handle.read().strip()
+    if not reference_text:
+        raise RuntimeError("Reference text file is empty: %s" % os.path.abspath(args.reference))
+    job = {
+        "action": "forced_alignment",
+        "audio": os.path.abspath(args.input),
+        "output": os.path.abspath(args.output),
+        "reference_text": reference_text,
+        "model_dir": args.model_dir or config.get("align_model_dir", ""),
+        "language": args.lang or config.get("align_language", DEFAULT_CONFIG["align_language"]),
+        "romanize": bool(args.romanize or (not args.no_romanize and config.get("align_romanize", DEFAULT_CONFIG["align_romanize"]))),
+        "threads": args.threads if args.threads is not None else config.get("align_threads", ""),
+        "batch_size": args.batch_size if args.batch_size is not None else int(config.get("align_batch_size", DEFAULT_CONFIG["align_batch_size"])),
+    }
+    result = core.run_forced_alignment(job)
+    print("OK: %s segments -> %s" % (result["count"], args.output))
+
+
 def _cli_proofread(args, config):
     api_key = args.api_key or config.get("dashscope_api_key") or os.environ.get("DASHSCOPE_API_KEY", "")
     if not api_key:
@@ -1057,6 +1180,17 @@ def build_parser():
     p.add_argument("--lang", default="zh")
     p.add_argument("--api-key")
 
+    p = sub.add_parser("align", help="Forced align reference text to audio")
+    p.add_argument("input")
+    p.add_argument("reference")
+    p.add_argument("output")
+    p.add_argument("--model-dir")
+    p.add_argument("--lang")
+    p.add_argument("--romanize", action="store_true")
+    p.add_argument("--no-romanize", action="store_true")
+    p.add_argument("--threads", type=int)
+    p.add_argument("--batch-size", type=int)
+
     p = sub.add_parser("proofread", help="Proofread SRT with LLM")
     p.add_argument("input")
     p.add_argument("output")
@@ -1095,6 +1229,8 @@ def main():
         config = load_config()
         if args.command == "asr":
             _cli_asr(args, config)
+        elif args.command == "align":
+            _cli_align(args, config)
         elif args.command == "proofread":
             _cli_proofread(args, config)
         elif args.command == "translate":

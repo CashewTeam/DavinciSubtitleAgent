@@ -8,12 +8,14 @@ import sys
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from subtitle_agent_app.core.align_ops import run_forced_alignment
     from subtitle_agent_app.core.asr_ops import run_asr
     from subtitle_agent_app.core.bootstrap import load_json
     from subtitle_agent_app.core.llm_ops import run_llm_optimize_text_stream, run_llm_srt_edit_stream, _stream_event
     from subtitle_agent_app.core.resolve_ops import run_export_audio
     from subtitle_agent_app.core.srt_ops import run_apply_corrections, run_convert_srt, run_read_srt
 else:
+    from .align_ops import run_forced_alignment
     from .asr_ops import run_asr
     from .bootstrap import load_json
     from .llm_ops import _stream_event, run_llm_optimize_text_stream, run_llm_srt_edit_stream
@@ -27,6 +29,8 @@ def run_worker_job(job):
         return run_export_audio(job)
     if action == "asr":
         return run_asr(job)
+    if action == "forced_alignment":
+        return run_forced_alignment(job)
     if action == "read_srt":
         return run_read_srt(job)
     if action == "convert_srt":
@@ -77,4 +81,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

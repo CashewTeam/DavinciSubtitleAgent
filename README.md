@@ -10,50 +10,52 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 
 - 连接当前 DaVinci Resolve 项目与时间线。
 - 导出时间线音频、导出当前时间线字幕、导入最终 SRT 到时间线。
-- 两种字幕识别模式：
+- 三种字幕识别模式：
   - 远程 ASR
+  - 强制对齐
   - Resolve 原生识别
 - 使用 OpenAI 兼容接口接入 DashScope / DeepSeek 做 SRT 校对、翻译、参考文案优化。
 - 在结果窗口中手动编辑 LLM 输出，再决定是否应用到主页。
+- 强制对齐基于 [corvo007/cpp-ctc-aligner](https://github.com/corvo007/cpp-ctc-aligner) 的 macOS release 产物接入，不在本仓库内重新编译。
+- 推荐初始化模型为 [csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12](https://huggingface.co/csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12)。
 
 ## 快速开始
 
-### 1. 安装 ffmpeg
-
-```bash
-brew install ffmpeg
-```
-
-确认可用：
-
-```bash
-ffmpeg -version
-ffprobe -version
-```
-
-### 2. 一键启动 app
+### 1. 一键启动 app
 
 如果你已经有打包好的 app，直接双击启动即可：
 
+### 2. 打开初始化面板
 
-### 3. 配置阿里云
+启动 app 后，在首页点击 `初始化`。
 
-远程 ASR 与 LLM 功能需要 DashScope API Key。
+初始化面板可以：
 
-首次启动后在设置页填写：
+- 检查 `Homebrew`、`ffmpeg` 和强制对齐模型状态
+- 通过 Homebrew 一键安装 `ffmpeg`
+- 下载推荐 Omnilingual ONNX 对齐模型
+- 保存基础 LLM 配置
 
-- `DashScope API Key`
-- `llm_model`
-- `llm_base_url`
+推荐模型下载源：
+
+- 镜像优先：`https://hf-mirror.com/csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12`
+- 官方回退：`https://huggingface.co/csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12`
+
+
+
 
 ## 当前识别模式
 
-主 app 只保留两种识别模式：
+主 app 当前提供三种识别模式：
 
 - `远程 ASR（云端识别）`
+- `强制对齐（参考文案 + 音频）`
 - `Resolve 原生识别（当前时间线）`
 
-本地 ASR 与强制对齐已从 UI 和主流程中移除。
+其中强制对齐默认可通过初始化面板自动下载 Omnilingual ONNX 模型；如果手动配置本地模型目录，目录内需至少满足以下之一：
+
+- `model.int8.onnx` + `tokens.txt`
+- `model.onnx` + `vocab.json`
 
 
 ## 项目结构
@@ -75,6 +77,7 @@ subtitle_agent_app/           # 主 app package
     resolve_ops.py            # Resolve 相关操作
     srt_ops.py                # SRT 解析/转换
     asr_ops.py                # 远程 ASR
+    align_ops.py              # 强制对齐
     llm_ops.py                # LLM 校对/翻译/文案优化
 subagent.png                  # UI 截图
 subtitle_agent/
@@ -157,6 +160,9 @@ APP_BIN="/Applications/Subtitle Agent.app/Contents/MacOS/Subtitle Agent"
 # 远程 ASR
 "$APP_BIN" asr audio.wav subtitles.srt
 
+# 强制对齐
+"$APP_BIN" align audio.wav reference.txt aligned.srt --model-dir /path/to/model_dir
+
 # 校对 SRT
 "$APP_BIN" proofread input.srt output.srt
 
@@ -185,6 +191,7 @@ python3 subtitle_agent_app.py read subtitles.srt
 
 ```text
 Project_subtitles_asr_remote_raw.srt
+Project_subtitles_forced_alignment_raw.srt
 Project_subtitles_resolve_builtin_raw.srt
 Project_subtitles_zh_cn.srt
 Project_reference_optimized.txt

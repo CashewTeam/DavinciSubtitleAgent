@@ -1,0 +1,193 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-cpp-ort-aligner:
+    name: cpp-ort-aligner (${{ matrix.os }} / ${{ matrix.generator }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            generator: "Ninja Multi-Config"
+            config: Release
+          - os: ubuntu-22.04
+            generator: Ninja
+            config: Release
+          - os: macos-latest
+            generator: Ninja
+            config: Release
+
+    env:
+      ORT_VERSION: "1.23.2"
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache ONNX Runtime package
+        uses: actions/cache@v4
+        with:
+          path: |
+            models/onnxruntime-win-x64-${{ env.ORT_VERSION }}
+            models/onnxruntime-linux-x64-${{ env.ORT_VERSION }}
+            models/onnxruntime-osx-universal2-${{ env.ORT_VERSION }}
+          key: ort-${{ env.ORT_VERSION }}-${{ runner.os }}
+
+      - name: Install build deps (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake g++
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install ninja cmake
+
+      - name: Install build deps (Windows)
+        if: runner.os == 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Download ONNX Runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path "models/onnxruntime-win-x64-${env:ORT_VERSION}") {
+            Write-Host "ORT already present (cache hit)"
+            exit 0
+          }
+          $zip = "onnxruntime-win-x64-${env:ORT_VERSION}.zip"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v${env:ORT_VERSION}/$zip"
+          $dst = Join-Path $env:RUNNER_TEMP $zip
+          Invoke-WebRequest -Uri $url -OutFile $dst
+          Expand-Archive -Path $dst -DestinationPath "models" -Force
+
+      - name: Download ONNX Runtime (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          if [ -d "models/onnxruntime-linux-x64-${ORT_VERSION}" ]; then
+            echo "ORT already present (cache hit)"
+            exit 0
+          fi
+          ZIP="onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          URL="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${ZIP}"
+          curl -L "$URL" -o "$ZIP"
+          mkdir -p models
+          tar -xzf "$ZIP" -C models
+
+      - name: Download ONNX Runtime (macOS universal2)
+        if: runner.os == 'macOS'
+        run: |
+          set -euxo pipefail
+          if [ -d "models/onnxruntime-osx-universal2-${ORT_VERSION}" ]; then
+            echo "ORT already present (cache hit)"
+            exit 0
+          fi
+          ZIP="onnxruntime-osx-universal2-${ORT_VERSION}.tgz"
+          URL="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/${ZIP}"
+          curl -L "$URL" -o "$ZIP"
+          mkdir -p models
+          tar -xzf "$ZIP" -C models
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ortDir = Resolve-Path "models/onnxruntime-win-x64-${env:ORT_VERSION}"
+          cmake -S . -B build-ci -G "${{ matrix.generator }}" `
+            -DUSE_SYSTEM_ORT=ON `
+            -DONNXRUNTIME_DIR="$ortDir"
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake --build build-ci --config "${{ matrix.config }}" --parallel 4
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          ORT_DIR="$(pwd)/models/onnxruntime-linux-x64-${ORT_VERSION}"
+          cmake -S . -B build-ci -G "${{ matrix.generator }}" \
+            -DUSE_SYSTEM_ORT=ON \
+            -DONNXRUNTIME_DIR="${ORT_DIR}"
+
+      - name: Configure (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euxo pipefail
+          ORT_DIR="$(pwd)/models/onnxruntime-osx-universal2-${ORT_VERSION}"
+          cmake -S . -B build-ci -G "${{ matrix.generator }}" \
+            -DUSE_SYSTEM_ORT=ON \
+            -DONNXRUNTIME_DIR="${ORT_DIR}"
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          cmake --build build-ci --config "${{ matrix.config }}" --parallel 4
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euxo pipefail
+          cmake --build build-ci --config "${{ matrix.config }}" --parallel 4
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Copy ORT DLL to exe directory to ensure correct version is loaded
+          $ortDll = "models/onnxruntime-win-x64-${env:ORT_VERSION}/lib/onnxruntime.dll"
+          $exeDir = "build-ci/${{ matrix.config }}"
+          Copy-Item $ortDll $exeDir
+          $exe = "$exeDir/cpp-ort-aligner.exe"
+          Write-Host "Running: $exe"
+          # Run and capture exit code
+          $proc = Start-Process -FilePath $exe -NoNewWindow -Wait -PassThru
+          $code = $proc.ExitCode
+          Write-Host "Exit code: $code"
+          if ($code -ne 2) { throw "Unexpected exit code: $code (expected 2 from usage)" }
+
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          set -euxo pipefail
+          # Expect usage exit code 2 when no args are provided.
+          set +e
+          ./build-ci/cpp-ort-aligner
+          code=$?
+          set -e
+          if [ "$code" -ne 2 ]; then
+            echo "Unexpected exit code: $code (expected 2 from usage)"
+            exit 1
+          fi
+
+      - name: Smoke test (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          set -euxo pipefail
+          # Expect usage exit code 2 when no args are provided.
+          set +e
+          ./build-ci/cpp-ort-aligner
+          code=$?
+          set -e
+          if [ "$code" -ne 2 ]; then
+            echo "Unexpected exit code: $code (expected 2 from usage)"
+            exit 1
+          fi

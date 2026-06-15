@@ -16,6 +16,7 @@ hiddenimports += collect_submodules("subtitle_agent_app")
 
 datas = [
     ("subagent.png", "."),
+    ("subtitle_agent_app/cpp-ort-aligner-macos-universal2", "subtitle_agent_app/cpp-ort-aligner-macos-universal2"),
 ]
 
 analysis = Analysis(
