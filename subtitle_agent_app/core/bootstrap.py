@@ -7,15 +7,14 @@ import re
 import sys
 import tempfile
 
+from ..platform_paths import APP_SUPPORT_DIR, configure_resolve_environment
 
-RESOLVE_SCRIPT_API = os.environ.get("RESOLVE_SCRIPT_API")
+
+RESOLVE_SCRIPT_API, RESOLVE_SCRIPT_LIB = configure_resolve_environment()
 if RESOLVE_SCRIPT_API:
-    sys.path.insert(0, os.path.join(RESOLVE_SCRIPT_API, "Modules"))
-else:
-    sys.path.insert(
-        0,
-        "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting/Modules",
-    )
+    RESOLVE_SCRIPT_MODULES = os.path.join(RESOLVE_SCRIPT_API, "Modules")
+    if os.path.isdir(RESOLVE_SCRIPT_MODULES):
+        sys.path.insert(0, RESOLVE_SCRIPT_MODULES)
 
 
 def _resolve_script_dir():
@@ -36,12 +35,22 @@ def _resolve_script_dir():
                 return os.path.dirname(abs_path)
         except Exception:
             pass
-    return "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
+    if os.name == "nt":
+        return os.path.join(
+            os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
+            "Blackmagic Design",
+            "DaVinci Resolve",
+            "Fusion",
+            "Scripts",
+            "Utility",
+        )
+    if sys.platform == "darwin":
+        return "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
+    return os.getcwd()
 
 
 SCRIPT_DIR = _resolve_script_dir()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/SubtitleAgent")
 CONFIG_PATH = os.environ.get("SUBTITLE_AGENT_CONFIG_PATH") or os.path.join(APP_SUPPORT_DIR, "subtitle_agent_config.json")
 LEGACY_CONFIG_PATH = os.path.join(PROJECT_ROOT, "subtitle_agent", "subtitle_agent_config.json")
 

@@ -4,15 +4,23 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
-from .bootstrap import ensure_dir, plain_subtitle_text, sanitize_name, worker_log
+from .bootstrap import RESOLVE_SCRIPT_API, RESOLVE_SCRIPT_LIB, ensure_dir, plain_subtitle_text, sanitize_name, worker_log
 from .srt_ops import read_srt_file, write_srt_entries
 
 
 def get_resolve():
-    import DaVinciResolveScript as dvr
+    try:
+        import DaVinciResolveScript as dvr
+    except (ImportError, OSError) as exc:
+        raise RuntimeError(
+            "Could not import DaVinciResolveScript. Check RESOLVE_SCRIPT_API="
+            "%s and RESOLVE_SCRIPT_LIB=%s."
+            % (RESOLVE_SCRIPT_API or "<unset>", RESOLVE_SCRIPT_LIB or "<unset>")
+        ) from exc
 
     return dvr.scriptapp("Resolve")
 
@@ -193,9 +201,10 @@ def ffmpeg_exe():
     found = shutil.which("ffmpeg")
     if found:
         return found
-    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"):
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
+    if sys.platform == "darwin":
+        for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
     raise RuntimeError("ffmpeg not found. Install ffmpeg or add it to PATH")
 
 

@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import queue
-import select
 import subprocess
 import sys
 import tempfile
@@ -13,6 +12,7 @@ import time
 import traceback
 from tkinter import filedialog, messagebox, simpledialog
 
+from .platform_paths import APP_SUPPORT_DIR, configure_resolve_environment
 from .core import api as core
 from .dialogs.init import InitDialog
 from .dialogs.result import ResultDialog as ResultDialogWidget
@@ -30,7 +30,6 @@ except ImportError:
 
 APP_NAME = "Subtitle Agent"
 APP_VERSION = "2.1.1"
-APP_SUPPORT_DIR = os.path.expanduser("~/Library/Application Support/SubtitleAgent")
 DEFAULT_OUTPUT_DIR = os.path.expanduser("~/Documents/asr")
 
 
@@ -65,31 +64,14 @@ def compact_user_path(path):
     return path
 
 
-def _can_prepare_directory(path):
-    try:
-        os.makedirs(path, exist_ok=True)
-        probe = os.path.join(path, ".subtitle_agent_probe")
-        with open(probe, "w", encoding="utf-8") as handle:
-            handle.write("ok")
-        os.unlink(probe)
-        return True
-    except Exception:
-        return False
-
-
 def runtime_config_path():
-    if _can_prepare_directory(APP_SUPPORT_DIR):
-        return os.path.join(APP_SUPPORT_DIR, "subtitle_agent_config.json")
-    legacy_dir = os.path.dirname(LEGACY_CONFIG_PATH)
-    if _can_prepare_directory(legacy_dir):
-        return LEGACY_CONFIG_PATH
-    fallback_dir = os.path.join(tempfile.gettempdir(), "SubtitleAgent")
-    os.makedirs(fallback_dir, exist_ok=True)
-    return os.path.join(fallback_dir, "subtitle_agent_config.json")
+    return os.environ.get("SUBTITLE_AGENT_CONFIG_PATH") or os.path.join(
+        APP_SUPPORT_DIR, "subtitle_agent_config.json"
+    )
 
 
 CONFIG_PATH = runtime_config_path()
-os.environ.setdefault("SUBTITLE_AGENT_CONFIG_PATH", CONFIG_PATH)
+os.environ["SUBTITLE_AGENT_CONFIG_PATH"] = CONFIG_PATH
 
 
 def ensure_app_support_dir():
@@ -411,40 +393,30 @@ class SubtitleAgentApp:
 
     def _worker_env(self):
         env = os.environ.copy()
-        resolve_api = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
-        resolve_lib = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
-        env.setdefault("RESOLVE_SCRIPT_API", resolve_api)
-        env.setdefault("RESOLVE_SCRIPT_LIB", resolve_lib)
-        module_path = os.path.join(resolve_api, "Modules")
-        env["PYTHONPATH"] = module_path + os.pathsep + env.get("PYTHONPATH", "")
+        configure_resolve_environment(env)
         env["SUBTITLE_AGENT_CONFIG_PATH"] = CONFIG_PATH
-        tool_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-        env["PATH"] = os.pathsep.join(tool_paths + [env.get("PATH", "")])
+        if os.name == "nt":
+            env["PYTHONIOENCODING"] = "utf-8"
         if self.config.get("dashscope_api_key"):
             env["DASHSCOPE_API_KEY"] = self.config["dashscope_api_key"]
         return env
 
     def _worker_cmd(self, job_path):
         if getattr(sys, "frozen", False):
-            return [sys.executable, "--core-worker", job_path]
+            worker_exe = sys.executable
+            if os.name == "nt":
+                worker_exe = os.path.join(os.path.dirname(sys.executable), "Subtitle Agent CLI.exe")
+            return [worker_exe, "--core-worker", job_path]
         return [self._worker_python(), CORE_PATH, "worker", job_path]
 
-    def _flush_worker_log_buffer(self, buffer, force=False):
+    def _drain_worker_stderr(self, events):
         while True:
-            newline = buffer.find("\n")
-            carriage = buffer.find("\r")
-            positions = [pos for pos in (newline, carriage) if pos >= 0]
-            if not positions:
-                break
-            pos = min(positions)
-            line = buffer[:pos].strip()
-            buffer = buffer[pos + 1 :]
-            if line:
-                self.log(line)
-        if force and buffer.strip():
-            self.log(buffer.strip())
-            return ""
-        return buffer
+            try:
+                line = events.get_nowait()
+            except queue.Empty:
+                return
+            if line.strip():
+                self.log(line.strip())
 
     def run_worker(self, job):
         fd, job_path = tempfile.mkstemp(prefix="subtitle_agent_job_", suffix=".json")
@@ -456,29 +428,44 @@ class SubtitleAgentApp:
                 self._worker_cmd(job_path),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=SCRIPT_DIR,
                 env=self._worker_env(),
             )
-            stderr_buffer = ""
-            stderr_fd = process.stderr.fileno()
+
+            stderr_events = queue.Queue()
+            stdout_chunks = []
+
+            def read_stderr():
+                for line in process.stderr:
+                    stderr_events.put(line)
+
+            def read_stdout():
+                stdout_chunks.append(process.stdout.read())
+
+            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+            stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+            stderr_thread.start()
+            stdout_thread.start()
             while process.poll() is None:
-                ready, _, _ = select.select([stderr_fd], [], [], 0.2)
-                if ready:
-                    chunk = os.read(stderr_fd, 4096)
-                    if chunk:
-                        stderr_buffer += chunk.decode("utf-8", "replace")
-                        stderr_buffer = self._flush_worker_log_buffer(stderr_buffer)
-            remaining = process.stderr.read() if process.stderr else b""
-            if remaining:
-                stderr_buffer += remaining.decode("utf-8", "replace")
-            self._flush_worker_log_buffer(stderr_buffer, force=True)
-            stdout_bytes = process.stdout.read() if process.stdout else b""
-            stdout = (stdout_bytes or b"").decode("utf-8", "replace").strip()
+                try:
+                    line = stderr_events.get(timeout=0.2).strip()
+                    if line:
+                        self.log(line)
+                except queue.Empty:
+                    pass
+            return_code = process.wait()
+            stderr_thread.join()
+            stdout_thread.join()
+            self._drain_worker_stderr(stderr_events)
+            stdout = "".join(stdout_chunks).strip()
             if not stdout:
                 raise RuntimeError("Worker returned no output")
             payload = json.loads(stdout)
-            if process.wait() != 0 and payload.get("success"):
-                raise RuntimeError("Worker failed with exit code %s" % process.returncode)
+            if return_code != 0 and payload.get("success"):
+                raise RuntimeError("Worker failed with exit code %s" % return_code)
             if not payload.get("success"):
                 raise RuntimeError(payload.get("error", "Worker failed"))
             if not payload.get("logs_streamed"):
@@ -508,31 +495,41 @@ class SubtitleAgentApp:
                 env=self._worker_env(),
                 bufsize=1,
             )
+            stderr_events = queue.Queue()
+
+            def read_stderr():
+                for line in process.stderr:
+                    stderr_events.put(line)
+
+            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+            stderr_thread.start()
             result_payload = None
-            for raw_line in process.stdout:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except Exception:
-                    dialog.append_status(line)
-                    continue
-                event_type = event.get("type")
-                if event_type == "status":
-                    dialog.append_status(event.get("message", ""))
-                elif event_type == "reasoning_summary":
-                    dialog.update_reasoning(event.get("message", ""))
-                elif event_type == "content_delta":
-                    dialog.append_output(event.get("text", ""))
-                elif event_type == "result":
-                    result_payload = event.get("payload") or {}
-                elif event_type == "error":
-                    raise RuntimeError(event.get("message", "Streaming worker failed"))
-            stderr = process.stderr.read() if process.stderr else ""
-            if stderr and stderr.strip():
-                self.log(stderr.strip())
-            return_code = process.wait()
+            try:
+                for raw_line in process.stdout:
+                    self._drain_worker_stderr(stderr_events)
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except Exception:
+                        dialog.append_status(line)
+                        continue
+                    event_type = event.get("type")
+                    if event_type == "status":
+                        dialog.append_status(event.get("message", ""))
+                    elif event_type == "reasoning_summary":
+                        dialog.update_reasoning(event.get("message", ""))
+                    elif event_type == "content_delta":
+                        dialog.append_output(event.get("text", ""))
+                    elif event_type == "result":
+                        result_payload = event.get("payload") or {}
+                    elif event_type == "error":
+                        raise RuntimeError(event.get("message", "Streaming worker failed"))
+            finally:
+                return_code = process.wait()
+                stderr_thread.join()
+                self._drain_worker_stderr(stderr_events)
             if return_code != 0:
                 raise RuntimeError("Streaming worker failed with exit code %s" % return_code)
             if not result_payload:
@@ -714,14 +711,14 @@ class SubtitleAgentApp:
     def _set_init_status(self, payload):
         if self.init_dialog is None:
             return
-        self.init_dialog.set_status(
-            {
-                "Homebrew": payload.get("brew_path") or ("可用" if payload.get("brew_ready") else "未安装"),
-                "ffmpeg": payload.get("ffmpeg_path") or payload.get("ffmpeg_error") or ("已就绪" if payload.get("ffmpeg_ready") else "未安装"),
-                "强制对齐模型": "已就绪" if payload.get("model_ready") else "未下载",
-                "模型目录": payload.get("model_dir") or self.config.get("align_model_dir", ""),
-            }
-        )
+        status = {
+            "ffmpeg": payload.get("ffmpeg_path") or payload.get("ffmpeg_error") or ("已就绪" if payload.get("ffmpeg_ready") else "未安装"),
+            "强制对齐模型": "已就绪" if payload.get("model_ready") else "未下载",
+            "模型目录": payload.get("model_dir") or self.config.get("align_model_dir", ""),
+        }
+        if "Homebrew" in self.init_dialog.status_labels:
+            status["Homebrew"] = payload.get("brew_path") or ("可用" if payload.get("brew_ready") else "未安装")
+        self.init_dialog.set_status(status)
 
     def _append_init_log(self, message):
         self.log(message)
@@ -748,6 +745,14 @@ class SubtitleAgentApp:
         self.run_in_thread(action)
 
     def on_init_install_ffmpeg(self):
+        if os.name == "nt":
+            messagebox.showinfo(
+                APP_NAME,
+                "请安装 Windows 版 ffmpeg，并将包含 ffmpeg.exe 的 bin 目录加入 PATH。\n\n"
+                "完成后重启 Subtitle Agent，再点击“重新检查”。",
+            )
+            return
+
         def action():
             result = core.install_ffmpeg(log_callback=self._append_init_log)
             self._append_init_log("ffmpeg ready: %s" % result.get("ffmpeg_path", ""))
@@ -1170,6 +1175,13 @@ def _cli_read(args):
         print("  ... (%s more)" % (data["count"] - 20))
 
 
+def configure_cli_stdio():
+    if os.name == "nt":
+        for stream in (sys.stdout, sys.stderr):
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("--core-worker", dest="core_worker", help=argparse.SUPPRESS)
@@ -1219,6 +1231,7 @@ def build_parser():
 
 
 def main():
+    configure_cli_stdio()
     ensure_config()
     parser = build_parser()
     args = parser.parse_args()

@@ -2,9 +2,7 @@
 
 ![Subtitle Agent UI](subagent.png)
 
-Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主界面使用 CustomTkinter，支持双击 `.app` 打开。
-
-目前仅面向 macOS。Windows 暂未适配。
+Subtitle Agent 使用 CustomTkinter，支持 macOS 和 Windows x64。Windows 使用 PyInstaller 目录包；macOS 使用 `.app`。
 
 ## 主要功能
 
@@ -16,16 +14,25 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
   - Resolve 原生识别
 - 使用 OpenAI 兼容接口接入 DashScope / DeepSeek 做 SRT 校对、翻译、参考文案优化。
 - 在结果窗口中手动编辑 LLM 输出，再决定是否应用到主页。
-- 强制对齐基于 [corvo007/cpp-ctc-aligner](https://github.com/corvo007/cpp-ctc-aligner) 的 macOS release 产物接入，不在本仓库内重新编译。
+- 强制对齐使用 [corvo007/cpp-ctc-aligner](https://github.com/corvo007/cpp-ctc-aligner) 的平台原生 release 产物。仓库包含 macOS universal2 和 Windows x64 运行文件。
 - 推荐初始化模型为 [csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12](https://huggingface.co/csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12)。
 
 ## 快速开始
 
-### 1. 一键启动 app
+### 1. 启动 app
 
-如果你已经有打包好的 app，直接双击启动即可：
+Windows：在 Windows x64 主机运行 `build_windows.ps1` 后，双击 `dist/windows/Subtitle Agent/Subtitle Agent.exe`；源码模式使用 `run_ui_debug.ps1`。macOS：双击 `Subtitle Agent.app`。
 
-如果首次打开被 macOS 拦截，请先双击压缩包内附带的 `fix_quarantine.command`，再重新打开 `Subtitle Agent.app`。
+Windows 只运行 `dist\windows\Subtitle Agent\` 目录中的程序，或从 ZIP 解压后的同名目录启动。`build\windows\SubtitleAgentWindows\` 是 PyInstaller 中间工作目录，其中生成的 EXE 缺少运行时文件，不能直接启动。
+
+Windows 目录包同时提供控制台 CLI：
+
+```powershell
+& ".\dist\windows\Subtitle Agent\Subtitle Agent CLI.exe" --help
+& ".\dist\windows\Subtitle Agent\Subtitle Agent CLI.exe" read "D:\项目\字幕.srt"
+```
+
+macOS 首次打开若被系统拦截，请按 macOS 打包说明处理隔离标记。
 
 ### 2. 打开初始化面板
 
@@ -33,8 +40,8 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 
 初始化面板可以：
 
-- 检查 `Homebrew`、`ffmpeg` 和强制对齐模型状态
-- 通过 Homebrew 一键安装 `ffmpeg`
+- 检查 `ffmpeg` 和强制对齐模型状态；macOS 另外检查 `Homebrew`
+- 在 macOS 上通过 Homebrew 安装 `ffmpeg`；Windows 上显示安装说明，需将 `ffmpeg.exe` 所在目录加入 PATH
 - 下载推荐 Omnilingual ONNX 对齐模型
 - 保存基础 LLM 配置
 
@@ -60,8 +67,10 @@ Subtitle Agent 现已调整为 **macOS 主应用优先** 的字幕工具：主�
 ## 项目结构
 
 ```text
-subtitle_agent_app.py         # macOS app 兼容入口（GUI + CLI + bundled worker）
+subtitle_agent_app.py         # GUI、CLI 和 bundled worker 入口
+SubtitleAgent.py               # DaVinci Resolve Scripts 菜单启动入口
 subtitle_agent_app/           # 主 app package
+  platform_paths.py            # 用户数据与 Resolve 路径
   main.py                     # 启动、CLI 分发、主 App 组装
   state.py                    # 运行状态初始化
   services.py                 # 文件读取与预览文本转换
@@ -77,19 +86,29 @@ subtitle_agent_app/           # 主 app package
     asr_ops.py                # 远程 ASR
     align_ops.py              # 强制对齐
     llm_ops.py                # LLM 校对/翻译/文案优化
+  cpp-ort-aligner-macos-universal2/
+  cpp-ort-aligner-windows-x64/
 subagent.png                  # UI 截图
-subtitle_agent/
 README.md
 AGENT_ENV_SETUP.md
 requirements.txt
 SubtitleAgent.spec
+SubtitleAgentWindows.spec
 build_macos_app.sh
 run_ui_debug.sh
+build_windows.ps1
+run_ui_debug.ps1
 ```
 
 ## 配置文件位置
 
-app 与 worker 统一使用这个配置文件：
+app、CLI 与 worker 使用同一个配置文件。Windows：
+
+```text
+%LOCALAPPDATA%\SubtitleAgent\subtitle_agent_config.json
+```
+
+macOS：
 
 ```text
 ~/Library/Application Support/SubtitleAgent/subtitle_agent_config.json
@@ -101,12 +120,23 @@ app 与 worker 统一使用这个配置文件：
 /Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/subtitle_agent/subtitle_agent_config.json
 ```
 
-首次启动 app 时会自动迁移。
+首次启动 app 时会自动迁移项目目录中的旧配置。
 ## 开发者
 <details>
 <summary><strong>折叠内容</strong></summary>
 
 ### 调试启动 UI
+
+Windows PowerShell：
+
+```powershell
+py -3.12 -m venv venv
+.\venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+.\run_ui_debug.ps1
+```
+
+macOS：
 
 ```bash
 ./run_ui_debug.sh
@@ -119,6 +149,17 @@ python3 subtitle_agent_app.py
 ```
 
 ### 打包
+
+Windows x64：在 Windows 上安装项目依赖后运行：
+
+```powershell
+.\build_windows.ps1
+```
+
+正式产物位于 `dist/windows/Subtitle Agent/`，并生成 `dist/windows/SubtitleAgent_Windows_x64_2.1.1.zip`。请从该目录（或解压后的完整目录）启动 `Subtitle Agent.exe`；不要启动 `build/windows/SubtitleAgentWindows/` 中的中间 EXE。
+目录包内包含 GUI、控制台 CLI、Python 运行时 DLL、Windows 对齐器 EXE、ONNX Runtime DLL 和拼音表。
+
+macOS：
 
 先安装依赖：
 
@@ -203,9 +244,34 @@ dist/Subtitle Agent.zip
 
 这个 zip 用于 notarization 提交；完成后脚本会自动 `staple` 回 `.app`。
 
+### Resolve 脚本菜单（Windows）
+
+将 `SubtitleAgent.py` 复制到 Resolve 的 Utility Scripts 目录：
+
+```text
+%PROGRAMDATA%\Blackmagic Design\DaVinci Resolve\Fusion\Scripts\Utility
+```
+
+设置 `SUBTITLE_AGENT_EXE` 用户环境变量指向目录包中的 `Subtitle Agent.exe`，然后重启 Resolve：
+
+```powershell
+[Environment]::SetEnvironmentVariable('SUBTITLE_AGENT_EXE', 'E:\Apps\Subtitle Agent\Subtitle Agent.exe', 'User')
+```
+
+Windows 启动后会优先从运行中的 Resolve 定位 `fusionscript.dll`，也会检查固定磁盘上的标准安装目录。仅当 Resolve 使用了非标准目录结构且未运行时，才需要手动设置 `RESOLVE_SCRIPT_LIB`。
+
+源码模式可改为设置 `SUBTITLE_AGENT_SCRIPT` 指向项目的 `subtitle_agent_app.py`，并设置 `SUBTITLE_AGENT_PYTHON` 指向已安装依赖的 Python 3.12。
+
 ### CLI
 
-主入口同时支持命令行：
+Windows 目录包的控制台入口为 `Subtitle Agent CLI.exe`；macOS 打包入口和源码入口也支持 CLI。Windows 示例：
+
+```powershell
+& ".\dist\windows\Subtitle Agent\Subtitle Agent CLI.exe" --help
+& ".\dist\windows\Subtitle Agent\Subtitle Agent CLI.exe" read "D:\项目\字幕.srt"
+```
+
+macOS 示例：
 
 ```bash
 APP_BIN="/Applications/Subtitle Agent.app/Contents/MacOS/Subtitle Agent"
@@ -252,12 +318,20 @@ Project_reference_optimized.txt
 
 ### 开发验证
 
+Windows PowerShell：
+
+```powershell
+& .\venv\Scripts\python.exe -m py_compile subtitle_agent_app.py SubtitleAgent.py
+```
+
+macOS：
+
 ```bash
 python3 -m py_compile subtitle_agent_app.py
 python3 -m py_compile subtitle_agent_app/core/*.py
 ```
 
-更多环境手动配置说明见 [AGENT_ENV_SETUP.md](/Users/con11/Documents/GitHub/DavinciSubtitleAgent/AGENT_ENV_SETUP.md)。
+更多环境手动配置说明见 [AGENT_ENV_SETUP.md](AGENT_ENV_SETUP.md)。
 
 </details>
 
@@ -266,7 +340,15 @@ python3 -m py_compile subtitle_agent_app/core/*.py
 
 ### 找不到 ffmpeg
 
-确认已经安装：
+Windows PowerShell 中确认 `ffmpeg.exe` 和 `ffprobe.exe` 均在 PATH：
+
+```powershell
+Get-Command ffmpeg, ffprobe
+ffmpeg -version
+ffprobe -version
+```
+
+macOS：
 
 ```bash
 brew install ffmpeg
@@ -277,6 +359,14 @@ which ffprobe
 ### 打包后的 app 无法读到配置
 
 确认配置文件位于：
+
+Windows：
+
+```text
+%LOCALAPPDATA%\SubtitleAgent\subtitle_agent_config.json
+```
+
+macOS：
 
 ```text
 ~/Library/Application Support/SubtitleAgent/subtitle_agent_config.json

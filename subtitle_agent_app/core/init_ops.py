@@ -3,6 +3,7 @@
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from urllib.parse import quote
 
@@ -44,11 +45,12 @@ def inspect_init_status(config=None):
     config = config or {}
     brew_path = ""
     brew_ready = False
-    try:
-        brew_path = brew_exe()
-        brew_ready = True
-    except Exception:
-        brew_path = ""
+    if sys.platform == "darwin":
+        try:
+            brew_path = brew_exe()
+            brew_ready = True
+        except Exception:
+            brew_path = ""
     ffmpeg_path = ""
     ffmpeg_ready = False
     ffmpeg_error = ""
@@ -87,12 +89,16 @@ def install_ffmpeg(log_callback=None):
         else:
             worker_log(logs, message)
 
-    brew_path = brew_exe()
     try:
         current = ffmpeg_exe()
         return {"success": True, "installed": False, "ffmpeg_path": current, "logs": logs}
     except Exception:
         pass
+
+    if os.name == "nt":
+        raise RuntimeError("Install ffmpeg.exe and add its bin directory to PATH, then restart Subtitle Agent.")
+
+    brew_path = brew_exe()
 
     cmd = [brew_path, "install", "ffmpeg"]
     log("Running: %s" % " ".join(cmd))

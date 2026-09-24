@@ -1,3 +1,6 @@
+import os
+import sys
+
 from ..panels.settings import LLMSettingsFields
 
 
@@ -26,10 +29,13 @@ class InitDialog:
         status.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
         status.grid_columnconfigure(1, weight=1)
         self.status_frame = status
-        self._add_status_row(status, 0, "Homebrew")
-        self._add_status_row(status, 1, "ffmpeg")
-        self._add_status_row(status, 2, "强制对齐模型")
-        self._add_status_row(status, 3, "模型目录")
+        row = 0
+        if sys.platform == "darwin":
+            self._add_status_row(status, row, "Homebrew")
+            row += 1
+        self._add_status_row(status, row, "ffmpeg")
+        self._add_status_row(status, row + 1, "强制对齐模型")
+        self._add_status_row(status, row + 2, "模型目录")
 
         body = ctk.CTkFrame(self.window)
         body.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 8))
@@ -42,7 +48,8 @@ class InitDialog:
         actions.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(actions, text="环境准备", anchor="w", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
         ctk.CTkButton(actions, text="重新检查", command=self.app.on_init_check).grid(row=1, column=0, sticky="ew", padx=12, pady=6)
-        ctk.CTkButton(actions, text="安装 ffmpeg", command=self.app.on_init_install_ffmpeg).grid(row=2, column=0, sticky="ew", padx=12, pady=6)
+        ffmpeg_button = "ffmpeg 安装说明" if os.name == "nt" else "安装 ffmpeg"
+        ctk.CTkButton(actions, text=ffmpeg_button, command=self.app.on_init_install_ffmpeg).grid(row=2, column=0, sticky="ew", padx=12, pady=6)
         ctk.CTkButton(actions, text="下载推荐模型", command=self.app.on_init_download_model).grid(row=3, column=0, sticky="ew", padx=12, pady=6)
 
         llm = ctk.CTkFrame(body)

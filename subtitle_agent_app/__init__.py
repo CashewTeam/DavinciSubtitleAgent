@@ -1,2 +1,2 @@
-"""Subtitle Agent macOS application package."""
+"""Subtitle Agent desktop application package."""
 

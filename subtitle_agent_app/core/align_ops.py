@@ -11,8 +11,10 @@ from .bootstrap import PROJECT_ROOT, ensure_dir, worker_log
 from .srt_ops import ms_to_srt, read_srt_file, write_srt_entries
 
 
-ALIGNER_DIR = "subtitle_agent_app/cpp-ort-aligner-macos-universal2"
-ALIGNER_BIN = "cpp-ort-aligner"
+ALIGNER_TARGETS = {
+    "darwin": ("subtitle_agent_app/cpp-ort-aligner-macos-universal2", "cpp-ort-aligner"),
+    "win32": ("subtitle_agent_app/cpp-ort-aligner-windows-x64", "cpp-ort-aligner.exe"),
+}
 PINYIN_TABLE = "Chinese_to_Pinyin.txt"
 
 LANGUAGE_MAP = {
@@ -37,14 +39,20 @@ def _resource_root():
 
 
 def _aligner_base_dir():
-    return os.path.join(_resource_root(), ALIGNER_DIR)
+    target = ALIGNER_TARGETS.get(sys.platform)
+    if target is None:
+        raise RuntimeError("Forced alignment is not packaged for platform: %s" % sys.platform)
+    return os.path.join(_resource_root(), target[0])
 
 
 def _aligner_bin_path():
-    path = os.path.join(_aligner_base_dir(), ALIGNER_BIN)
+    target = ALIGNER_TARGETS.get(sys.platform)
+    if target is None:
+        raise RuntimeError("Forced alignment is not packaged for platform: %s" % sys.platform)
+    path = os.path.join(_aligner_base_dir(), target[1])
     if not os.path.isfile(path):
         raise RuntimeError("Forced aligner binary not found: %s" % path)
-    if not os.access(path, os.X_OK):
+    if sys.platform != "win32" and not os.access(path, os.X_OK):
         raise RuntimeError("Forced aligner is not executable: %s" % path)
     return path
 
