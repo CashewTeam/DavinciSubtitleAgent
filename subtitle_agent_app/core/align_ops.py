@@ -18,7 +18,6 @@ ALIGNER_TARGETS = {
 WINDOWS_ALIGNER_TARGETS = {
     "amd64": ("subtitle_agent_app/cpp-ort-aligner-windows-x64", "cpp-ort-aligner.exe"),
     "x86_64": ("subtitle_agent_app/cpp-ort-aligner-windows-x64", "cpp-ort-aligner.exe"),
-    "arm64": ("subtitle_agent_app/cpp-ort-aligner-windows-arm64", "cpp-ort-aligner.exe"),
 }
 PINYIN_TABLE = "Chinese_to_Pinyin.txt"
 

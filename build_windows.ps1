@@ -22,19 +22,11 @@ if ($LASTEXITCODE -ne 0 -or -not $Version) {
 }
 
 $Machine = (& $Python @PythonArgs -c "import platform; print(platform.machine())").Trim().ToLowerInvariant()
-switch ($Machine) {
-    { $_ -in @("amd64", "x86_64") } {
-        $Architecture = "x64"
-        $ExpectedPeMachine = 0x8664
-        break
-    }
-    "arm64" {
-        $Architecture = "ARM64"
-        $ExpectedPeMachine = 0xAA64
-        break
-    }
-    default { throw "Unsupported Windows build architecture: $Machine" }
+if ($Machine -notin @("amd64", "x86_64")) {
+    throw "Windows packages are built for x64 only; current architecture is $Machine."
 }
+$Architecture = "x64"
+$ExpectedPeMachine = 0x8664
 
 $DistPath = Join-Path $PSScriptRoot "dist\windows"
 $WorkPath = Join-Path $PSScriptRoot "build\windows"

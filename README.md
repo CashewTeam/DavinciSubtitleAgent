@@ -2,7 +2,7 @@
 
 ![Subtitle Agent UI](subagent.png)
 
-Subtitle Agent 使用 CustomTkinter，支持 macOS ARM64、Windows x64 和 Windows ARM64。Windows 使用 PyInstaller 目录包；macOS 使用 `.app`。
+Subtitle Agent 使用 CustomTkinter，支持 macOS ARM64 和 Windows x64。Windows 使用 PyInstaller 目录包；macOS 使用 `.app`。
 
 ## 主要功能
 
@@ -14,7 +14,7 @@ Subtitle Agent 使用 CustomTkinter，支持 macOS ARM64、Windows x64 和 Windo
   - Resolve 原生识别
 - 使用 OpenAI 兼容接口接入 DashScope / DeepSeek 做 SRT 校对、翻译、参考文案优化。
 - 在结果窗口中手动编辑 LLM 输出，再决定是否应用到主页。
-- 强制对齐使用 [corvo007/cpp-ctc-aligner](https://github.com/corvo007/cpp-ctc-aligner) 的平台原生 release 产物。仓库包含 macOS ARM64、Windows x64 和 Windows ARM64 运行文件。
+- 强制对齐使用 [corvo007/cpp-ctc-aligner](https://github.com/corvo007/cpp-ctc-aligner) 的平台原生 release 产物。仓库包含 macOS ARM64 和 Windows x64 运行文件。
 - 推荐初始化模型为 [csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12](https://huggingface.co/csukuangfj2/sherpa-onnx-omnilingual-asr-1600-languages-300M-ctc-int8-2025-11-12)。
 
 ## 快速开始
@@ -88,7 +88,6 @@ subtitle_agent_app/           # 主 app package
     llm_ops.py                # LLM 校对/翻译/文案优化
   cpp-ort-aligner-macos-arm64/
   cpp-ort-aligner-windows-x64/
-  cpp-ort-aligner-windows-arm64/
 subagent.png                  # UI 截图
 README.md
 AGENT_ENV_SETUP.md
@@ -247,7 +246,7 @@ dist/Subtitle Agent.zip
 
 ### 手动发布 GitHub Release
 
-仓库的 `.github/workflows/release.yml` 仅配置 `workflow_dispatch`。在 GitHub Actions 页面手动运行 **Manual Release**，工作流会读取 `subtitle_agent_app/main.py` 中的 `APP_VERSION`，分别在 ARM64 macOS、Windows x64 和 Windows ARM64 runner 上构建，并创建 `v<APP_VERSION>` Release，附上三个安装包和 `SHA256SUMS.txt`。发布新版本前先更新 `APP_VERSION`；如果同名 Release 已存在，发布步骤会失败，不会覆盖旧 Release。
+仓库的 `.github/workflows/release.yml` 仅配置 `workflow_dispatch`。在 GitHub Actions 页面手动运行 **Manual Release**，工作流会读取 `subtitle_agent_app/main.py` 中的 `APP_VERSION`，分别在 ARM64 macOS 和 Windows x64 runner 上构建，并创建 `v<APP_VERSION>` Release，附上两个安装包和 `SHA256SUMS.txt`。发布新版本前先更新 `APP_VERSION`；如果同名 Release 已存在，发布步骤会失败，不会覆盖旧 Release。
 
 GitHub Actions 默认生成未签名的 macOS 应用；压缩包包含 `fix_quarantine.command`。如需 Developer ID 签名和 notarization，需另行配置 Apple 证书与凭据。
 

@@ -77,11 +77,6 @@ jobs:
             platform: windows
             artifact: Windows_x64
             python_architecture: x64
-          - label: Windows ARM64
-            runner: windows-11-arm
-            platform: windows
-            artifact: Windows_ARM64
-            python_architecture: arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Check out selected revision
@@ -94,28 +89,8 @@ jobs:
         with:
           python-version: "3.12"
           architecture: ${{ matrix.python_architecture }}
-
-      - name: Install OpenSSL for Windows ARM64
-        if: matrix.artifact == 'Windows_ARM64'
-        shell: pwsh
-        run: |
-          $VcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
-          if (-not $VcpkgRoot) {
-            throw "VCPKG_INSTALLATION_ROOT is not configured on this runner."
-          }
-
-          & (Join-Path $VcpkgRoot "vcpkg.exe") install openssl:arm64-windows-static-md
-          if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg failed to install ARM64 OpenSSL."
-          }
-
-          $OpenSSLDir = Join-Path $VcpkgRoot "installed\arm64-windows-static-md"
-          if (-not (Test-Path -LiteralPath (Join-Path $OpenSSLDir "include\openssl\ssl.h"))) {
-            throw "The ARM64 OpenSSL headers were not installed under $OpenSSLDir."
-          }
-
-          "OPENSSL_DIR=$OpenSSLDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "OPENSSL_STATIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies (macOS)
         if: matrix.platform == 'macos'
@@ -173,8 +148,8 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           packages=(release-assets/SubtitleAgent_*.zip)
-          if [[ ${#packages[@]} -ne 3 ]]; then
-            echo "Expected 3 platform packages, found ${#packages[@]}" >&2
+          if [[ ${#packages[@]} -ne 2 ]]; then
+            echo "Expected 2 platform packages, found ${#packages[@]}" >&2
             printf '%s\n' "${packages[@]}" >&2
             exit 1
           fi

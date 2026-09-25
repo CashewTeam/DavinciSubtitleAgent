@@ -1,7 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import platform
-
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
@@ -16,10 +14,7 @@ hiddenimports += collect_submodules("customtkinter")
 hiddenimports += collect_submodules("openai")
 hiddenimports += collect_submodules("subtitle_agent_app")
 
-windows_arch = {"amd64": "x64", "x86_64": "x64", "arm64": "arm64"}.get(platform.machine().lower())
-if windows_arch is None:
-    raise SystemExit("Windows package architecture is unsupported: %s" % platform.machine())
-aligner_dir = "subtitle_agent_app/cpp-ort-aligner-windows-%s" % windows_arch
+aligner_dir = "subtitle_agent_app/cpp-ort-aligner-windows-x64"
 
 datas = [
     ("subagent.png", "."),
