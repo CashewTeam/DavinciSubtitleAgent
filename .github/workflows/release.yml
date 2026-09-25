@@ -95,6 +95,28 @@ jobs:
           python-version: "3.12"
           architecture: ${{ matrix.python_architecture }}
 
+      - name: Install OpenSSL for Windows ARM64
+        if: matrix.artifact == 'Windows_ARM64'
+        shell: pwsh
+        run: |
+          $VcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
+          if (-not $VcpkgRoot) {
+            throw "VCPKG_INSTALLATION_ROOT is not configured on this runner."
+          }
+
+          & (Join-Path $VcpkgRoot "vcpkg.exe") install openssl:arm64-windows-static-md
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg failed to install ARM64 OpenSSL."
+          }
+
+          $OpenSSLDir = Join-Path $VcpkgRoot "installed\arm64-windows-static-md"
+          if (-not (Test-Path -LiteralPath (Join-Path $OpenSSLDir "include\openssl\ssl.h"))) {
+            throw "The ARM64 OpenSSL headers were not installed under $OpenSSLDir."
+          }
+
+          "OPENSSL_DIR=$OpenSSLDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "OPENSSL_STATIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Install dependencies (macOS)
         if: matrix.platform == 'macos'
         shell: bash
