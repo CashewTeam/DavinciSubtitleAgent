@@ -2,6 +2,7 @@
 
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -12,8 +13,12 @@ from .srt_ops import ms_to_srt, read_srt_file, write_srt_entries
 
 
 ALIGNER_TARGETS = {
-    "darwin": ("subtitle_agent_app/cpp-ort-aligner-macos-universal2", "cpp-ort-aligner"),
-    "win32": ("subtitle_agent_app/cpp-ort-aligner-windows-x64", "cpp-ort-aligner.exe"),
+    "darwin": ("subtitle_agent_app/cpp-ort-aligner-macos-arm64", "cpp-ort-aligner"),
+}
+WINDOWS_ALIGNER_TARGETS = {
+    "amd64": ("subtitle_agent_app/cpp-ort-aligner-windows-x64", "cpp-ort-aligner.exe"),
+    "x86_64": ("subtitle_agent_app/cpp-ort-aligner-windows-x64", "cpp-ort-aligner.exe"),
+    "arm64": ("subtitle_agent_app/cpp-ort-aligner-windows-arm64", "cpp-ort-aligner.exe"),
 }
 PINYIN_TABLE = "Chinese_to_Pinyin.txt"
 
@@ -38,17 +43,27 @@ def _resource_root():
     return getattr(sys, "_MEIPASS", PROJECT_ROOT)
 
 
-def _aligner_base_dir():
-    target = ALIGNER_TARGETS.get(sys.platform)
+def _aligner_target():
+    if sys.platform == "win32":
+        target = WINDOWS_ALIGNER_TARGETS.get(platform.machine().lower())
+    elif sys.platform == "darwin":
+        if platform.machine().lower() != "arm64":
+            raise RuntimeError("Forced alignment is packaged for macOS ARM64 only")
+        target = ALIGNER_TARGETS[sys.platform]
+    else:
+        target = ALIGNER_TARGETS.get(sys.platform)
     if target is None:
-        raise RuntimeError("Forced alignment is not packaged for platform: %s" % sys.platform)
+        raise RuntimeError("Forced alignment is not packaged for platform: %s (%s)" % (sys.platform, platform.machine()))
+    return target
+
+
+def _aligner_base_dir():
+    target = _aligner_target()
     return os.path.join(_resource_root(), target[0])
 
 
 def _aligner_bin_path():
-    target = ALIGNER_TARGETS.get(sys.platform)
-    if target is None:
-        raise RuntimeError("Forced alignment is not packaged for platform: %s" % sys.platform)
+    target = _aligner_target()
     path = os.path.join(_aligner_base_dir(), target[1])
     if not os.path.isfile(path):
         raise RuntimeError("Forced aligner binary not found: %s" % path)

@@ -3,6 +3,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+case "$(uname -m)" in
+  arm64)
+    MACOS_ARCH="ARM64"
+    EXPECTED_APP_ARCH="arm64"
+    ;;
+  *)
+    echo "Only macOS ARM64 builds are supported; current architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
 DEFAULT_VENV_PYTHON="$PWD/venv/bin/python"
 if [[ -z "${PYTHON_BIN:-}" ]]; then
   if [[ -x "$DEFAULT_VENV_PYTHON" ]]; then
@@ -30,6 +41,13 @@ PY
 
 "$PYTHON_BIN" -m PyInstaller --clean --noconfirm "SubtitleAgent.spec"
 
+APP_EXECUTABLE="dist/Subtitle Agent.app/Contents/MacOS/Subtitle Agent"
+APP_ARCHS="$(/usr/bin/lipo -archs "$APP_EXECUTABLE")"
+if [[ "$APP_ARCHS" != "$EXPECTED_APP_ARCH" ]]; then
+  echo "Expected $EXPECTED_APP_ARCH app binary, got: $APP_ARCHS" >&2
+  exit 1
+fi
+
 if [[ -n "${MACOS_CODESIGN_IDENTITY:-}" ]]; then
   echo "Signing and notarization enabled."
   ./sign_macos_app.sh "dist/Subtitle Agent.app"
@@ -45,7 +63,7 @@ mkdir -p "$DIST_PACKAGE_DIR"
 cp -R "dist/Subtitle Agent.app" "$DIST_PACKAGE_DIR/"
 cp "fix_quarantine.command" "$DIST_PACKAGE_DIR/"
 
-ZIP_PATH="dist/SubtitleAgent_macOS_ARM64_${APP_VERSION}.zip"
+ZIP_PATH="dist/SubtitleAgent_macOS_${MACOS_ARCH}_${APP_VERSION}.zip"
 rm -f "$ZIP_PATH"
 /usr/bin/ditto -c -k --keepParent "$DIST_PACKAGE_DIR" "$ZIP_PATH"
 echo "Adhoc distribution zip ready: $ZIP_PATH"

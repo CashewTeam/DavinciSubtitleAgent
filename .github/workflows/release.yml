@@ -1,0 +1,183 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: Optional release notes. Leave blank to generate notes from GitHub history.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Read application version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read APP_VERSION
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          tree = ast.parse(Path("subtitle_agent_app/main.py").read_text(encoding="utf-8"))
+          for node in tree.body:
+              if isinstance(node, ast.Assign) and any(
+                  isinstance(target, ast.Name) and target.id == "APP_VERSION"
+                  for target in node.targets
+              ):
+                  print(ast.literal_eval(node.value))
+                  break
+          else:
+              raise SystemExit("APP_VERSION was not found")
+          PY
+          )"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid APP_VERSION: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS ARM64
+            runner: macos-15
+            platform: macos
+            artifact: macOS_ARM64
+            python_architecture: arm64
+          - label: Windows x64
+            runner: windows-2025
+            platform: windows
+            artifact: Windows_x64
+            python_architecture: x64
+          - label: Windows ARM64
+            runner: windows-11-arm
+            platform: windows
+            artifact: Windows_ARM64
+            python_architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out selected revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.python_architecture }}
+
+      - name: Install dependencies (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          python -m venv venv
+          ./venv/bin/python -m pip install --upgrade pip
+          ./venv/bin/python -m pip install -r requirements.txt
+
+      - name: Build macOS package
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          ./build_macos_app.sh
+          test -f "dist/SubtitleAgent_${{ matrix.artifact }}_${{ needs.version.outputs.version }}.zip"
+
+      - name: Install dependencies (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          python -m venv venv
+          .\venv\Scripts\python.exe -m pip install --upgrade pip
+          .\venv\Scripts\python.exe -m pip install -r requirements.txt
+
+      - name: Build Windows package
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: .\build_windows.ps1
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.artifact }}
+          path: ${{ matrix.platform == 'windows' && format('dist/windows/SubtitleAgent_{0}_{1}.zip', matrix.artifact, needs.version.outputs.version) || format('dist/SubtitleAgent_{0}_{1}.zip', matrix.artifact, needs.version.outputs.version) }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub Release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify packages and generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(release-assets/SubtitleAgent_*.zip)
+          if [[ ${#packages[@]} -ne 3 ]]; then
+            echo "Expected 3 platform packages, found ${#packages[@]}" >&2
+            printf '%s\n' "${packages[@]}" >&2
+            exit 1
+          fi
+          (
+            cd release-assets
+            sha256sum SubtitleAgent_*.zip > SHA256SUMS.txt
+          )
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$RELEASE_NOTES" ]]; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" release-assets/SubtitleAgent_*.zip release-assets/SHA256SUMS.txt \
+              --target "$GITHUB_SHA" \
+              --title "Subtitle Agent $RELEASE_VERSION" \
+              --notes "$RELEASE_NOTES"
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" release-assets/SubtitleAgent_*.zip release-assets/SHA256SUMS.txt \
+              --target "$GITHUB_SHA" \
+              --title "Subtitle Agent $RELEASE_VERSION" \
+              --generate-notes
+          fi

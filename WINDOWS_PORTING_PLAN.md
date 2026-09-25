@@ -52,6 +52,7 @@
 - 构建脚本验证目录包中包含 `python312.dll` 与 VC Runtime DLL，并输出正式 GUI 启动路径；构建成功后会删除 workpath 中容易误点的中间 EXE。README 明确说明 `build/windows/SubtitleAgentWindows/` 不是运行目录。
 - 新增 Resolve Scripts 菜单入口 `SubtitleAgent.py`；已验证入口能将含空格的 exe 路径作为一个参数交给 Windows。更新 README 与环境配置文档中的 Windows 安装、运行、构建及 Resolve 配置步骤。
 - 本机执行 `build_windows.ps1` 成功，产物为 `dist/windows/Subtitle Agent/` 和 `dist/windows/SubtitleAgent_Windows_x64_2.1.1.zip`。
+- GitHub Release 工作流仅手动触发，构建 ARM64 macOS、x64 Windows 和 ARM64 Windows 三个平台。Windows ARM64 使用原生 `windows-11-arm` runner 和上游 ARM64 对齐器；构建脚本会核对 EXE 的 PE 架构。ARM64 工作流尚未在 GitHub Actions 实际运行，本机 x64 不能替代该验证。
 
 ### 阶段 5：Windows 本机验收 — 部分完成
 
@@ -85,6 +86,7 @@
 
 - `subtitle_agent_app/platform_paths.py`：平台数据目录和 Resolve 环境路径。
 - `subtitle_agent_app/cpp-ort-aligner-windows-x64/`：上游 Windows x64 对齐器运行资源。
+- `subtitle_agent_app/cpp-ort-aligner-windows-arm64/`：上游 Windows ARM64 对齐器运行资源。
 - `SubtitleAgentWindows.spec`：Windows GUI/CLI 目录包规格。
 - `build_windows.ps1`、`run_ui_debug.ps1`：Windows 构建和源码启动脚本。
 - `SubtitleAgent.py`：Resolve Scripts 菜单启动入口。

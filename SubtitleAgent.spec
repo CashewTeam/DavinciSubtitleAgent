@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from PyInstaller.utils.hooks import collect_submodules
+from subtitle_agent_app.main import APP_VERSION
 
 
 hiddenimports = [
@@ -16,7 +17,7 @@ hiddenimports += collect_submodules("subtitle_agent_app")
 
 datas = [
     ("subagent.png", "."),
-    ("subtitle_agent_app/cpp-ort-aligner-macos-universal2", "subtitle_agent_app/cpp-ort-aligner-macos-universal2"),
+    ("subtitle_agent_app/cpp-ort-aligner-macos-arm64", "subtitle_agent_app/cpp-ort-aligner-macos-arm64"),
 ]
 
 analysis = Analysis(
@@ -62,7 +63,7 @@ app = BUNDLE(
     icon=None,
     bundle_identifier="com.cashewteam.subtitleagent",
     info_plist={
-        "CFBundleShortVersionString": "2.1.1",
-        "CFBundleVersion": "2.1.1",
+        "CFBundleShortVersionString": APP_VERSION,
+        "CFBundleVersion": APP_VERSION,
     },
 )

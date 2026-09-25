@@ -21,6 +21,21 @@ if ($LASTEXITCODE -ne 0 -or -not $Version) {
     throw "Could not read the application version."
 }
 
+$Machine = (& $Python @PythonArgs -c "import platform; print(platform.machine())").Trim().ToLowerInvariant()
+switch ($Machine) {
+    { $_ -in @("amd64", "x86_64") } {
+        $Architecture = "x64"
+        $ExpectedPeMachine = 0x8664
+        break
+    }
+    "arm64" {
+        $Architecture = "ARM64"
+        $ExpectedPeMachine = 0xAA64
+        break
+    }
+    default { throw "Unsupported Windows build architecture: $Machine" }
+}
+
 $DistPath = Join-Path $PSScriptRoot "dist\windows"
 $WorkPath = Join-Path $PSScriptRoot "build\windows"
 & $Python @PythonArgs -m PyInstaller --clean --noconfirm --distpath $DistPath --workpath $WorkPath "SubtitleAgentWindows.spec"
@@ -37,6 +52,25 @@ foreach ($ExpectedExe in @($AppExe, $CliExe)) {
     }
 }
 
+function Get-PeMachine([string]$Path) {
+    $Bytes = [System.IO.File]::ReadAllBytes($Path)
+    $PeOffset = [BitConverter]::ToInt32($Bytes, 0x3C)
+    if ($PeOffset -lt 0 -or $PeOffset + 6 -gt $Bytes.Length) {
+        throw "Invalid PE executable: $Path"
+    }
+    if ([System.Text.Encoding]::ASCII.GetString($Bytes, $PeOffset, 4) -ne "PE`0`0") {
+        throw "Invalid PE signature: $Path"
+    }
+    return [BitConverter]::ToUInt16($Bytes, $PeOffset + 4)
+}
+
+foreach ($ExpectedExe in @($AppExe, $CliExe)) {
+    $PeMachine = Get-PeMachine $ExpectedExe
+    if ($PeMachine -ne $ExpectedPeMachine) {
+        throw "Unexpected executable architecture for ${ExpectedExe}: PE machine 0x$($PeMachine.ToString('X4')), expected 0x$($ExpectedPeMachine.ToString('X4'))."
+    }
+}
+
 $PythonDll = Get-ChildItem -LiteralPath $AppDir -Filter "python312.dll" -Recurse -File | Select-Object -First 1
 if (-not $PythonDll) {
     throw "The packaged application is missing python312.dll: $AppDir"
@@ -48,7 +82,7 @@ foreach ($RuntimeDllName in @("VCRUNTIME140.dll", "VCRUNTIME140_1.dll")) {
     }
 }
 
-$ZipPath = Join-Path $DistPath ("SubtitleAgent_Windows_x64_{0}.zip" -f $Version)
+$ZipPath = Join-Path $DistPath ("SubtitleAgent_Windows_{0}_{1}.zip" -f $Architecture, $Version)
 $WorkspaceRoot = [System.IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\') + '\'
 $ZipFullPath = [System.IO.Path]::GetFullPath($ZipPath)
 if (-not $ZipFullPath.StartsWith($WorkspaceRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
